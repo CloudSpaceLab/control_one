@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ControlRoomExecutiveOverview, Tenant } from '@/lib/api';
 import { useApiClient } from '@/hooks/useApiClient';
 import { aggregateExecutiveOverviews } from './aggregateExecutiveOverviews';
+import { mapSettledBounded } from '@/lib/mapSettledBounded';
 
 type TenantScope = Pick<Tenant, 'id' | 'name'>;
 
@@ -47,11 +48,12 @@ export function useExecutiveOverview(
         return;
       }
 
-      const results = await Promise.allSettled(
-        tenantScope.map(async (tenant) => ({
+      const results = await mapSettledBounded(
+        tenantScope,
+        async (tenant) => ({
           tenant,
           overview: await api.getControlRoomExecutiveOverview(tenant.id, period),
-        })),
+        }),
       );
       if (nextRequestId !== requestId.current || activeScopeKey.current !== scopeKey) return;
 
