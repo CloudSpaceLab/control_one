@@ -1776,7 +1776,9 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 
 	var tenants []storage.Tenant
 	var total int
-	if accessStore, ok := s.store.(interface {
+	if principal.Type != "user" {
+		tenants, total, err = s.store.ListTenants(r.Context(), namePrefix, limit, offset)
+	} else if accessStore, ok := s.store.(interface {
 		ListAccessibleTenants(context.Context, uuid.UUID, []string, string, int, int) ([]storage.Tenant, int, error)
 	}); ok {
 		userID := principalStorageUserID(s, r.Context(), principal)
