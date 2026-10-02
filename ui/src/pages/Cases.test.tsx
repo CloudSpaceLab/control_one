@@ -162,6 +162,49 @@ describe('Cases', () => {
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(mockApi);
   });
 
+  it('loads All tenants cases and resolves detail/actions against the case tenant', async () => {
+    const user = userEvent.setup();
+    const tenantTwoCase: SOCCase = {
+      ...secondCase,
+      tenant_id: 'tenant-2',
+      title: 'Bank B database audit gap',
+    };
+    vi.spyOn(useTenantModule, 'useTenant').mockReturnValue({
+      currentTenantId: null,
+      currentTenant: null,
+      tenants: [
+        { id: 'tenant-1', name: 'Bank A', created_at: '2026-05-21T00:00:00Z' },
+        { id: 'tenant-2', name: 'Bank B', created_at: '2026-05-22T00:00:00Z' },
+      ],
+      loading: false,
+      error: null,
+      setCurrentTenantId: vi.fn(),
+      refresh: vi.fn(),
+    });
+    mockApi.listSOCCases.mockResolvedValue({
+      data: [caseRow, tenantTwoCase],
+      pagination: { total: 17, count: 2, limit: 12, offset: 0, nextOffset: 12, prevOffset: null },
+    });
+    mockApi.getSOCCase.mockImplementation(async (id: string) => (
+      id === tenantTwoCase.case_id ? tenantTwoCase : caseRow
+    ));
+
+    render(<MemoryRouter><Cases /></MemoryRouter>);
+
+    await waitFor(() => expect(mockApi.listSOCCases).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: undefined,
+      limit: 12,
+      offset: 0,
+    })));
+    expect(await screen.findByText('All tenants · tracked investigations with evidence, timeline, notes, actions, and export.')).toBeInTheDocument();
+    expect(screen.getByText('Bank A')).toBeInTheDocument();
+    expect(screen.getByText('Bank B')).toBeInTheDocument();
+
+    await user.click(screen.getByText('Bank B database audit gap'));
+    await waitFor(() => expect(mockApi.getSOCCase).toHaveBeenLastCalledWith(tenantTwoCase.case_id, 'tenant-2'));
+    expect(mockApi.getTeamUsers).toHaveBeenCalledWith('tenant-2');
+  });
+
   it('fetches the next page from the server', async () => {
     const user = userEvent.setup();
     mockApi.listSOCCases.mockResolvedValue({ data: [caseRow], pagination: { total: 25 } });

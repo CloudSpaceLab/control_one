@@ -18,6 +18,7 @@ type tenantAccessFakeStore struct {
 	seenUser   uuid.UUID
 	seenTenant uuid.UUID
 	seenRoles  []string
+	accessible []storage.Tenant
 }
 
 func (f *tenantAccessFakeStore) UserHasTenantRole(_ context.Context, userID, tenantID uuid.UUID, roles []string) (bool, error) {
@@ -25,6 +26,12 @@ func (f *tenantAccessFakeStore) UserHasTenantRole(_ context.Context, userID, ten
 	f.seenTenant = tenantID
 	f.seenRoles = append([]string(nil), roles...)
 	return f.allowed, nil
+}
+
+func (f *tenantAccessFakeStore) ListAccessibleTenants(_ context.Context, userID uuid.UUID, roles []string, _ string, _, _ int) ([]storage.Tenant, int, error) {
+	f.seenUser = userID
+	f.seenRoles = append([]string(nil), roles...)
+	return append([]storage.Tenant(nil), f.accessible...), len(f.accessible), nil
 }
 
 func TestRequireTenantAccessUsesPersistedTenantRoles(t *testing.T) {
@@ -75,5 +82,35 @@ func TestRequireTenantAccessRejectsUnassignedTenant(t *testing.T) {
 	}
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccessibleTenantIDsUsesPersistedRoleScope(t *testing.T) {
+	t.Parallel()
+
+	userID := uuid.New()
+	first := storage.Tenant{ID: uuid.New(), Name: "Bank A"}
+	second := storage.Tenant{ID: uuid.New(), Name: "Bank B"}
+	store := &tenantAccessFakeStore{
+		accessible: []storage.Tenant{first, second},
+		fakeStore: fakeStore{users: map[string]*storage.User{
+			"oidc-subject": {ID: userID, ExternalID: "oidc-subject"},
+		}},
+	}
+	srv := &Server{store: store}
+	principal := &auth.Principal{Type: "user", Subject: "oidc-subject", Roles: []string{roleViewer}}
+
+	ids, err := srv.accessibleTenantIDs(context.Background(), principal, roleViewer, roleAdmin)
+	if err != nil {
+		t.Fatalf("accessibleTenantIDs: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != first.ID || ids[1] != second.ID {
+		t.Fatalf("ids=%v, want [%s %s]", ids, first.ID, second.ID)
+	}
+	if store.seenUser != userID {
+		t.Fatalf("seen user=%s want %s", store.seenUser, userID)
+	}
+	if len(store.seenRoles) != 2 || store.seenRoles[0] != roleViewer || store.seenRoles[1] != roleAdmin {
+		t.Fatalf("roles=%v", store.seenRoles)
 	}
 }

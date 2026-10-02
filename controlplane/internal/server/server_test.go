@@ -3427,6 +3427,16 @@ func (f *fakeStore) ListTenants(_ context.Context, prefix string, limit, offset 
 	return filtered, total, nil
 }
 
+func (f *fakeStore) ListAccessibleTenants(
+	ctx context.Context,
+	_ uuid.UUID,
+	_ []string,
+	prefix string,
+	limit, offset int,
+) ([]storage.Tenant, int, error) {
+	return f.ListTenants(ctx, prefix, limit, offset)
+}
+
 func (f *fakeStore) ListJobs(_ context.Context, tenantID uuid.UUID, jobType string, status storage.JobStatus, limit, offset int) ([]storage.Job, int, error) {
 	var filtered []storage.Job
 	for _, job := range f.jobs {

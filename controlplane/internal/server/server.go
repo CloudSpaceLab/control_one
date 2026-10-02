@@ -1761,7 +1761,8 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -1773,7 +1774,30 @@ func (s *Server) handleListTenants(w http.ResponseWriter, r *http.Request) {
 
 	namePrefix := strings.TrimSpace(r.URL.Query().Get("name_prefix"))
 
-	tenants, total, err := s.store.ListTenants(r.Context(), namePrefix, limit, offset)
+	var tenants []storage.Tenant
+	var total int
+	if principal.Type != "user" {
+		tenants, total, err = s.store.ListTenants(r.Context(), namePrefix, limit, offset)
+	} else if accessStore, ok := s.store.(interface {
+		ListAccessibleTenants(context.Context, uuid.UUID, []string, string, int, int) ([]storage.Tenant, int, error)
+	}); ok {
+		userID := principalStorageUserID(s, r.Context(), principal)
+		if userID == uuid.Nil {
+			http.Error(w, "tenant access gate unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		tenants, total, err = accessStore.ListAccessibleTenants(
+			r.Context(),
+			userID,
+			principal.Roles,
+			namePrefix,
+			limit,
+			offset,
+		)
+	} else {
+		http.Error(w, "tenant access gate unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		s.logger.Error("list tenants", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -2023,7 +2047,8 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 
@@ -2034,6 +2059,7 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var tenantID uuid.UUID
+	var tenantIDs []uuid.UUID
 	if tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id")); tenantParam != "" {
 		parsed, err := uuid.Parse(tenantParam)
 		if err != nil {
@@ -2041,11 +2067,45 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tenantID = parsed
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+			return
+		}
+	} else {
+		tenantIDs, err = s.accessibleTenantIDs(
+			r.Context(),
+			principal,
+			roleViewer,
+			roleOperator,
+			roleInvestigator,
+			roleAdmin,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if len(tenantIDs) == 0 {
+			writeJSON(w, http.StatusOK, paginatedResponse[nodeResponse]{
+				Data:       []nodeResponse{},
+				Pagination: newPaginationMeta(0, limit, offset, 0),
+			})
+			return
+		}
 	}
 
 	hostnamePrefix := strings.TrimSpace(r.URL.Query().Get("hostname_prefix"))
 
-	nodes, total, err := s.store.ListNodes(r.Context(), tenantID, hostnamePrefix, limit, offset)
+	var nodes []storage.Node
+	var total int
+	if tenantID != uuid.Nil {
+		nodes, total, err = s.store.ListNodes(r.Context(), tenantID, hostnamePrefix, limit, offset)
+	} else if scopedStore, ok := s.store.(interface {
+		ListNodesForTenants(context.Context, []uuid.UUID, string, int, int) ([]storage.Node, int, error)
+	}); ok {
+		nodes, total, err = scopedStore.ListNodesForTenants(r.Context(), tenantIDs, hostnamePrefix, limit, offset)
+	} else {
+		http.Error(w, "tenant-scoped node store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		s.logger.Error("list nodes", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

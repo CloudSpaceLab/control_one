@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 type AIInvestigationStatus string
@@ -54,6 +55,7 @@ type CreateAIInvestigationParams struct {
 
 type ListAIInvestigationsFilter struct {
 	TenantID         uuid.UUID
+	TenantIDs        []uuid.UUID
 	NodeID           uuid.UUID
 	Status           AIInvestigationStatus
 	Severity         string
@@ -254,6 +256,18 @@ func (s *Store) ListAIInvestigations(ctx context.Context, filter ListAIInvestiga
 	if filter.TenantID != uuid.Nil {
 		args = append(args, filter.TenantID)
 		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	} else if len(filter.TenantIDs) > 0 {
+		tenantIDs := make([]string, 0, len(filter.TenantIDs))
+		for _, tenantID := range filter.TenantIDs {
+			if tenantID != uuid.Nil {
+				tenantIDs = append(tenantIDs, tenantID.String())
+			}
+		}
+		if len(tenantIDs) == 0 {
+			return []AIInvestigation{}, 0, nil
+		}
+		args = append(args, pq.Array(tenantIDs))
+		clauses = append(clauses, fmt.Sprintf("tenant_id = ANY($%d::uuid[])", len(args)))
 	}
 	if filter.NodeID != uuid.Nil {
 		args = append(args, filter.NodeID)

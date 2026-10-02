@@ -56,7 +56,7 @@ export function Cases(): JSX.Element {
   const [searchParams] = useSearchParams();
   const requestedCaseId = searchParams.get('case_id');
   const api = useApiClient();
-  const { currentTenantId, currentTenant } = useTenant();
+  const { currentTenantId, currentTenant, tenants } = useTenant();
   const [cases, setCases] = useState<SOCCase[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedCase, setSelectedCase] = useState<SOCCase | null>(null);
@@ -100,22 +100,12 @@ export function Cases(): JSX.Element {
   }, [currentTenantId, statusFilter, severityFilter, sinceDate, untilDate, debouncedSearch, sorting]);
 
   const refresh = useCallback(async () => {
-    if (!currentTenantId) {
-      setCases([]);
-      setSelectedId(null);
-      setSelectedCase(null);
-      setExportPreview(null);
-      setError(null);
-      setNoteStatus(null);
-      setLoading(false);
-      return;
-    }
     const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
     try {
       const response = await api.listSOCCases({
-        tenantId: currentTenantId,
+        tenantId: currentTenantId ?? undefined,
         limit: pageSize,
         offset: page * pageSize,
         status: statusFilter || undefined,
@@ -159,11 +149,12 @@ export function Cases(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
-    if (!currentTenantId) {
+    const tenantId = selectedCase?.tenant_id ?? currentTenantId;
+    if (!tenantId) {
       setTeamUsers([]);
       return;
     }
-    api.getTeamUsers(currentTenantId).then((users) => {
+    api.getTeamUsers(tenantId).then((users) => {
       if (!cancelled) setTeamUsers(users);
     }).catch(() => {
       if (!cancelled) setTeamUsers([]);
@@ -171,14 +162,15 @@ export function Cases(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [api, currentTenantId]);
+  }, [api, currentTenantId, selectedCase?.tenant_id]);
 
   useEffect(() => {
-    if (!selectedId || !currentTenantId) {
+    if (!selectedId) {
       setSelectedCase(null);
       setExportPreview(null);
       return;
     }
+    const rowTenantId = cases.find((row) => row.case_id === selectedId)?.tenant_id;
     let cancelled = false;
     setDetailLoading(true);
     setSelectedCase(null);
@@ -189,7 +181,7 @@ export function Cases(): JSX.Element {
     setNoteMentions([]);
     setNoteStatus(null);
     api
-      .getSOCCase(selectedId, currentTenantId)
+      .getSOCCase(selectedId, currentTenantId ?? rowTenantId ?? undefined)
       .then((row) => {
         if (!cancelled) setSelectedCase(row);
       })
@@ -205,9 +197,19 @@ export function Cases(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [api, currentTenantId, selectedId]);
+  }, [api, cases, currentTenantId, selectedId]);
 
   const columns = useMemo<ColumnDef<SOCCase>[]>(() => [
+    ...(!currentTenantId ? [{
+      id: 'tenant',
+      header: 'Tenant',
+      enableSorting: false,
+      cell: ({ row }: { row: { original: SOCCase } }) => (
+        <span className="text-xs text-text-secondary">
+          {tenants.find((tenant) => tenant.id === row.original.tenant_id)?.name ?? row.original.tenant_id}
+        </span>
+      ),
+    } as ColumnDef<SOCCase>] : []),
     {
       accessorKey: 'severity',
       header: 'Severity',
@@ -261,17 +263,17 @@ export function Cases(): JSX.Element {
         </span>
       ),
     },
-  ], []);
+  ], [currentTenantId, tenants]);
 
   const statusCounts = useMemo(() => summarizeCases(cases), [cases]);
 
   const addNote = async () => {
-    if (!selectedCase || !currentTenantId || !noteDraft.trim() || noteSaving) return;
+    if (!selectedCase || !noteDraft.trim() || noteSaving) return;
     setNoteStatus('Saving note...');
     setNoteSaving(true);
     try {
       const citations = selectedCase.evidence_refs?.map((ref) => ref.id).slice(0, 5);
-      await api.addSOCCaseNote(selectedCase.case_id, currentTenantId, {
+      await api.addSOCCaseNote(selectedCase.case_id, selectedCase.tenant_id, {
         note: noteDraft,
         citations,
         mentions: noteMentions,
@@ -279,7 +281,7 @@ export function Cases(): JSX.Element {
       setNoteDraft('');
       setNoteMentions([]);
       setNoteStatus('Note added to the audit record.');
-      setSelectedCase(await api.getSOCCase(selectedCase.case_id, currentTenantId));
+      setSelectedCase(await api.getSOCCase(selectedCase.case_id, selectedCase.tenant_id));
     } catch (err) {
       setNoteStatus(`Note failed: ${errorMessage(err, 'Unable to add note.')}`);
     } finally {
@@ -288,11 +290,11 @@ export function Cases(): JSX.Element {
   };
 
   const assignOwner = async (user: TeamUser | null) => {
-    if (!selectedCase || !currentTenantId || assignmentSaving) return;
+    if (!selectedCase || assignmentSaving) return;
     setAssignmentSaving(true);
     setError(null);
     try {
-      const updated = await api.assignSOCCase(selectedCase.case_id, currentTenantId, {
+      const updated = await api.assignSOCCase(selectedCase.case_id, selectedCase.tenant_id, {
         assignee_id: user?.id ?? null,
       });
       setSelectedCase(updated);
@@ -305,11 +307,11 @@ export function Cases(): JSX.Element {
   };
 
   const previewExport = async () => {
-    if (!selectedCase || !currentTenantId || exportLoading) return;
+    if (!selectedCase || exportLoading) return;
     setExportLoading(true);
     setExportError(null);
     try {
-      setExportPreview(await api.exportSOCCase(selectedCase.case_id, currentTenantId));
+      setExportPreview(await api.exportSOCCase(selectedCase.case_id, selectedCase.tenant_id));
     } catch (err) {
       setExportPreview(null);
       setExportError(`Export preview failed: ${errorMessage(err, 'Unable to generate export preview.')}`);
@@ -323,7 +325,7 @@ export function Cases(): JSX.Element {
       <SectionHeader
         eyebrow="INVESTIGATIONS"
         title="Cases"
-        description={`${currentTenant?.name ?? 'Current tenant'} · tracked investigations with evidence, timeline, notes, actions, and export.`}
+        description={`${currentTenant?.name ?? 'All tenants'} · tracked investigations with evidence, timeline, notes, actions, and export.`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
@@ -341,10 +343,10 @@ export function Cases(): JSX.Element {
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <CaseMetric label="Open" value={statusCounts.open} tone={statusCounts.open > 0 ? 'warning' : 'healthy'} />
-        <CaseMetric label="Investigating" value={statusCounts.investigating} tone="info" />
-        <CaseMetric label="Export ready" value={statusCounts.exportReady} tone="healthy" />
-        <CaseMetric label="Evidence gaps" value={statusCounts.evidenceGaps} tone={statusCounts.evidenceGaps > 0 ? 'degraded' : 'healthy'} />
+        <CaseMetric label="Visible open" value={statusCounts.open} tone={statusCounts.open > 0 ? 'warning' : 'healthy'} />
+        <CaseMetric label="Visible investigating" value={statusCounts.investigating} tone="info" />
+        <CaseMetric label="Visible export ready" value={statusCounts.exportReady} tone="healthy" />
+        <CaseMetric label="Visible evidence gaps" value={statusCounts.evidenceGaps} tone={statusCounts.evidenceGaps > 0 ? 'degraded' : 'healthy'} />
       </div>
 
       {error ? (

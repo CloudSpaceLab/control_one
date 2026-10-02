@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // severitySortExpr orders severity by risk rank rather than alphabetically so
@@ -366,6 +367,7 @@ func (s *Store) GetAlert(ctx context.Context, id uuid.UUID) (*Alert, error) {
 
 type AlertFilter struct {
 	TenantID          uuid.UUID
+	TenantIDs         []uuid.UUID
 	NodeID            uuid.UUID
 	IncludeUnresolved bool
 	State             string
@@ -387,6 +389,19 @@ func (s *Store) ListAlerts(ctx context.Context, f AlertFilter, limit, offset int
 	if f.TenantID != uuid.Nil {
 		where = append(where, fmt.Sprintf("tenant_id = $%d", idx))
 		args = append(args, f.TenantID)
+		idx++
+	} else if len(f.TenantIDs) > 0 {
+		tenantIDs := make([]string, 0, len(f.TenantIDs))
+		for _, tenantID := range f.TenantIDs {
+			if tenantID != uuid.Nil {
+				tenantIDs = append(tenantIDs, tenantID.String())
+			}
+		}
+		if len(tenantIDs) == 0 {
+			return []Alert{}, 0, nil
+		}
+		where = append(where, fmt.Sprintf("tenant_id = ANY($%d::uuid[])", idx))
+		args = append(args, pq.Array(tenantIDs))
 		idx++
 	}
 	if f.NodeID != uuid.Nil {
