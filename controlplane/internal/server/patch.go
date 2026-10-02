@@ -208,6 +208,9 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
+		return
+	}
 	requestedMode := strings.TrimSpace(req.Mode)
 	if requestedMode == "" {
 		requestedMode = "auto"
@@ -569,7 +572,8 @@ func stringSliceContainsFold(values []string, target string) bool {
 }
 
 func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -579,6 +583,9 @@ func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Reque
 	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
 	if err != nil {
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 50)
@@ -595,6 +602,63 @@ func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Reque
 	}{
 		Deployments: deployments,
 		GeneratedAt: time.Now().UTC(),
+	})
+}
+
+func (s *Server) handlePatchSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	if s.store == nil {
+		http.Error(w, "store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	var tenantIDs []uuid.UUID
+	if raw := strings.TrimSpace(r.URL.Query().Get("tenant_id")); raw != "" {
+		tenantID, err := uuid.Parse(raw)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+			return
+		}
+		tenantIDs = []uuid.UUID{tenantID}
+	} else {
+		var err error
+		tenantIDs, err = s.accessibleTenantIDs(r.Context(), principal, roleViewer, roleOperator, roleAdmin)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+
+	summaryStore, ok := s.store.(interface {
+		GetPatchDeploymentSummary(context.Context, []uuid.UUID) (storage.PatchDeploymentSummary, error)
+	})
+	if !ok {
+		http.Error(w, "patch summary store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	summary, err := summaryStore.GetPatchDeploymentSummary(r.Context(), tenantIDs)
+	if err != nil {
+		s.logger.Warn("patch summary", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		storage.PatchDeploymentSummary
+		GeneratedAt time.Time `json:"generated_at"`
+	}{
+		PatchDeploymentSummary: summary,
+		GeneratedAt:            time.Now().UTC(),
 	})
 }
 

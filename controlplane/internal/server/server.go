@@ -1331,6 +1331,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/network/active-blocks", s.handleListActiveBlocks)
 	s.baseRouter.HandleFunc("/api/v1/network/blocks/", s.handleNetworkBlocksSubroute)
 	// Patch management — fleet OS package patching (PR 4).
+	s.baseRouter.HandleFunc("/api/v1/patch/summary", s.handlePatchSummary)
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments", s.handlePatchDeployments)
 	s.baseRouter.HandleFunc("/api/v1/patch/deployments/", s.handlePatchDeploymentSubroute)
 	// Patch approval gate — operator approve→dispatch loop (S4 row 8 / D1

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // PatchApproval is the patch-domain twin of RemediationApproval. It captures
@@ -44,6 +45,7 @@ type CreatePatchApprovalParams struct {
 // ListPatchApprovalsFilter narrows a list query.
 type ListPatchApprovalsFilter struct {
 	TenantID     uuid.UUID
+	TenantIDs    []uuid.UUID
 	DeploymentID uuid.UUID
 	NodeID       uuid.UUID
 	Status       ApprovalStatus // empty = any
@@ -143,6 +145,18 @@ func (s *Store) ListPatchApprovals(ctx context.Context, filter ListPatchApproval
 	if filter.TenantID != uuid.Nil {
 		args = append(args, filter.TenantID)
 		clauses = append(clauses, fmt.Sprintf("tenant_id = $%d", len(args)))
+	} else if len(filter.TenantIDs) > 0 {
+		values := make([]string, 0, len(filter.TenantIDs))
+		for _, tenantID := range filter.TenantIDs {
+			if tenantID != uuid.Nil {
+				values = append(values, tenantID.String())
+			}
+		}
+		if len(values) == 0 {
+			return []PatchApproval{}, 0, nil
+		}
+		args = append(args, pq.Array(values))
+		clauses = append(clauses, fmt.Sprintf("tenant_id = ANY($%d::uuid[])", len(args)))
 	}
 	if filter.DeploymentID != uuid.Nil {
 		args = append(args, filter.DeploymentID)

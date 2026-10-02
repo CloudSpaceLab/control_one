@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // PatchDeployment is one operator-initiated patch run. It fans out to N
@@ -33,6 +34,62 @@ type PatchDeployment struct {
 
 // NodePatchState is the per-node row created when a deployment fans out.
 // Status moves pending → applied | failed as the agent reports back.
+type PatchDeploymentSummary struct {
+	Total            int `json:"total"`
+	Pending          int `json:"pending"`
+	InProgress       int `json:"in_progress"`
+	Completed        int `json:"completed"`
+	Partial          int `json:"partial"`
+	Failed           int `json:"failed"`
+	PendingApprovals int `json:"pending_approvals"`
+}
+
+func (s *Store) GetPatchDeploymentSummary(ctx context.Context, tenantIDs []uuid.UUID) (PatchDeploymentSummary, error) {
+	var out PatchDeploymentSummary
+	if s.db == nil {
+		return out, errors.New("store database not initialized")
+	}
+	values := make([]string, 0, len(tenantIDs))
+	for _, tenantID := range tenantIDs {
+		if tenantID != uuid.Nil {
+			values = append(values, tenantID.String())
+		}
+	}
+	if len(values) == 0 {
+		return out, nil
+	}
+	tenantArray := pq.Array(values)
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*)::int,
+			COUNT(*) FILTER (WHERE status = 'pending')::int,
+			COUNT(*) FILTER (WHERE status = 'in_progress')::int,
+			COUNT(*) FILTER (WHERE status = 'completed')::int,
+			COUNT(*) FILTER (WHERE status = 'partial')::int,
+			COUNT(*) FILTER (WHERE status = 'failed')::int
+		FROM patch_deployments
+		WHERE tenant_id = ANY($1::uuid[])
+	`, tenantArray).Scan(
+		&out.Total,
+		&out.Pending,
+		&out.InProgress,
+		&out.Completed,
+		&out.Partial,
+		&out.Failed,
+	); err != nil {
+		return out, fmt.Errorf("patch deployment summary: %w", err)
+	}
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)::int
+		FROM patch_approvals
+		WHERE tenant_id = ANY($1::uuid[])
+		  AND status = 'pending'
+	`, tenantArray).Scan(&out.PendingApprovals); err != nil {
+		return out, fmt.Errorf("patch approval summary: %w", err)
+	}
+	return out, nil
+}
+
 type NodePatchState struct {
 	ID               uuid.UUID
 	DeploymentID     uuid.UUID
