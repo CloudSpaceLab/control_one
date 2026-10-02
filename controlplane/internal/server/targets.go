@@ -22,7 +22,7 @@ type targetIdentityStore interface {
 
 func (s *Server) targetAccess(w http.ResponseWriter, r *http.Request, permission string) (storage.TargetAccess, bool) {
 	roles := []string{roleViewer}
-	if permission == "targets.write" {
+	if permission == "targets.write" || permission == "targets.connect" {
 		roles = []string{roleOperator, roleAdmin}
 	}
 	principal, ok := s.authorizePermission(w, r, permission, roles...)

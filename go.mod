@@ -19,6 +19,7 @@ require (
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/go-webauthn/webauthn v0.17.0
 	github.com/golang-migrate/migrate/v4 v4.17.1
+	github.com/gosnmp/gosnmp v1.42.1
 	github.com/hibiken/asynq v0.25.1
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/kdomanski/iso9660 v0.4.0

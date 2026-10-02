@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -12,32 +13,37 @@ import (
 
 // Config captures control plane service settings.
 type Config struct {
-	HTTP           HTTPConfig           `mapstructure:"http"`
-	TLS            TLSConfig            `mapstructure:"tls"`
-	Observability  ObservabilityConfig  `mapstructure:"observability"`
-	Database       DatabaseConfig       `mapstructure:"database"`
-	Worker         WorkerConfig         `mapstructure:"worker"`
-	Jobs           JobsConfig           `mapstructure:"jobs"`
-	Auth           AuthConfig           `mapstructure:"auth"`
-	Registration   RegistrationConfig   `mapstructure:"registration"`
-	Enrollment     EnrollmentConfig     `mapstructure:"enrollment"`
-	Agent          AgentConfig          `mapstructure:"agent"`
-	Remediation    RemediationConfig    `mapstructure:"remediation"`
-	Secrets        SecretsConfig        `mapstructure:"secrets"`
-	WebAuthn       WebAuthnConfig       `mapstructure:"webauthn"`
-	Analytics      AnalyticsConfig      `mapstructure:"analytics"`
-	Doris          DorisConfig          `mapstructure:"doris"`
-	Bastion        BastionConfig        `mapstructure:"bastion"`
-	LDAP           LDAPConfig           `mapstructure:"ldap"`
-	IPIntel        IPIntelConfig        `mapstructure:"ipintel"`
-	ThreatIntel    ThreatIntelConfig    `mapstructure:"threat_intel"`
-	IPBehavior     IPBehaviorConfig     `mapstructure:"ip_behavior"`
-	OfflineContent OfflineContentConfig `mapstructure:"offline_content"`
-	SIEMForwarding SIEMForwardingConfig `mapstructure:"siem_forwarding"`
-	PrivateAccess  PrivateAccessConfig  `mapstructure:"private_access"`
-	Vault          VaultConfig          `mapstructure:"vault"`
-	Policy         PolicyConfig         `mapstructure:"policy"`
-	AML            AMLConfig            `mapstructure:"aml"`
+	HTTP              HTTPConfig              `mapstructure:"http"`
+	TLS               TLSConfig               `mapstructure:"tls"`
+	Observability     ObservabilityConfig     `mapstructure:"observability"`
+	Database          DatabaseConfig          `mapstructure:"database"`
+	Worker            WorkerConfig            `mapstructure:"worker"`
+	Jobs              JobsConfig              `mapstructure:"jobs"`
+	Auth              AuthConfig              `mapstructure:"auth"`
+	Registration      RegistrationConfig      `mapstructure:"registration"`
+	Enrollment        EnrollmentConfig        `mapstructure:"enrollment"`
+	Agent             AgentConfig             `mapstructure:"agent"`
+	Remediation       RemediationConfig       `mapstructure:"remediation"`
+	Secrets           SecretsConfig           `mapstructure:"secrets"`
+	NetworkOnboarding NetworkOnboardingConfig `mapstructure:"network_onboarding"`
+	WebAuthn          WebAuthnConfig          `mapstructure:"webauthn"`
+	Analytics         AnalyticsConfig         `mapstructure:"analytics"`
+	Doris             DorisConfig             `mapstructure:"doris"`
+	Bastion           BastionConfig           `mapstructure:"bastion"`
+	LDAP              LDAPConfig              `mapstructure:"ldap"`
+	IPIntel           IPIntelConfig           `mapstructure:"ipintel"`
+	ThreatIntel       ThreatIntelConfig       `mapstructure:"threat_intel"`
+	IPBehavior        IPBehaviorConfig        `mapstructure:"ip_behavior"`
+	OfflineContent    OfflineContentConfig    `mapstructure:"offline_content"`
+	SIEMForwarding    SIEMForwardingConfig    `mapstructure:"siem_forwarding"`
+	PrivateAccess     PrivateAccessConfig     `mapstructure:"private_access"`
+	Vault             VaultConfig             `mapstructure:"vault"`
+	Policy            PolicyConfig            `mapstructure:"policy"`
+	AML               AMLConfig               `mapstructure:"aml"`
+}
+
+type NetworkOnboardingConfig struct {
+	AllowedCIDRs []string `mapstructure:"allowed_cidrs"`
 }
 
 type VaultConfig struct {
@@ -662,6 +668,11 @@ func Validate(cfg *Config) error {
 	}
 	if strings.TrimSpace(cfg.Database.URL) == "" {
 		return fmt.Errorf("database.url is required")
+	}
+	for _, cidr := range cfg.NetworkOnboarding.AllowedCIDRs {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("network_onboarding.allowed_cidrs must contain valid CIDRs")
+		}
 	}
 
 	if backend := strings.ToLower(strings.TrimSpace(cfg.Worker.Backend)); backend == "asynq" || cfg.Worker.Asynq.Enabled {

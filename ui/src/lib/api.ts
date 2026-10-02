@@ -42,6 +42,41 @@ export interface CreateNetworkTargetPayload {
   management_addresses: string[];
 }
 
+export interface NetworkCredentialConfig {
+  username: string;
+  password?: string;
+  private_key?: string;
+  passphrase?: string;
+  host_key_fingerprint?: string;
+  auth_protocol?: string;
+  auth_secret?: string;
+  priv_protocol?: string;
+  priv_secret?: string;
+}
+
+export interface NetworkConnectionReceipt {
+  id: string;
+  tenant_id: string;
+  credential_id: string;
+  protocol: 'snmpv3' | 'ssh';
+  address: string;
+  port: number;
+  state: 'testing' | 'authenticated' | 'auth_failed' | 'unreachable' | 'unsupported' | 'policy_blocked';
+  completed_at?: string;
+  result: {
+    state: string;
+    message: string;
+    vendor: string;
+    model: string;
+    platform: string;
+    suggested_type: string;
+    confidence: number;
+    evidence: string[];
+    capabilities: string[];
+    required_privileges: string;
+  };
+}
+
 export interface ListNetworkTargetsParams {
   tenantId?: string;
   search?: string;
@@ -2731,6 +2766,18 @@ export class APIClient {
 
   async createNetworkTarget(payload: CreateNetworkTargetPayload): Promise<NetworkTarget> {
     return this.request<NetworkTarget>('/api/v1/targets', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async createNetworkCredential(payload: { tenant_id: string; name: string; protocol: 'snmpv3' | 'ssh'; config: NetworkCredentialConfig }): Promise<{ id: string }> {
+    return this.request('/api/v1/network-onboarding/credentials', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async testNetworkConnection(payload: { tenant_id: string; credential_id: string; address: string; port: number }): Promise<NetworkConnectionReceipt> {
+    return this.request('/api/v1/network-onboarding/tests', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async saveNetworkOnboarding(payload: { test_id: string; display_name: string; type: string; site: string; group: string; telemetry_sources: string[] }): Promise<NetworkTarget> {
+    return this.request('/api/v1/network-onboarding/save', { method: 'POST', body: JSON.stringify(payload) });
   }
 
   async getNetworkTarget(id: string): Promise<NetworkTarget> {

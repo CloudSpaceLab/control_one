@@ -13,6 +13,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import type { NetworkTarget } from '../lib/api';
+import { NetworkDeviceWizard } from '../components/NetworkDeviceWizard';
 
 const TYPES = [
   ['router', 'Router'], ['switch', 'Switch'], ['firewall', 'Firewall'],
@@ -41,7 +42,9 @@ export function NetworkDevices(): JSX.Element {
   const [offset, setOffset] = useState(0);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [identityOnly, setIdentityOnly] = useState(false);
   const canWrite = profile?.permissions?.includes('targets.write') ?? profile?.roles.some((role) => ['admin', 'operator'].includes(role)) ?? false;
+  const canConnect = profile?.permissions?.includes('targets.connect') ?? profile?.roles.some((role) => ['admin', 'operator'].includes(role)) ?? false;
   const tenantScope = currentTenantId ?? undefined;
   const previousTenant = useRef(currentTenantId);
   // A tenant switch clears an open detail from the previous scope.
@@ -103,7 +106,7 @@ export function NetworkDevices(): JSX.Element {
   return <div className="flex flex-col gap-5">
     <SectionHeader eyebrow="OPERATIONS" title="Network devices" description="Agentless network and security inventory."
       actions={<><Button variant="secondary" onClick={() => list.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>{canWrite && <Button onClick={() => { setFormError(null); setAdding(true); }}><Plus className="mr-2 h-4 w-4" />Add network device</Button>}</>} />
-    <Alert variant="info" title="Identity registration available">Connection tests and telemetry setup are not available yet. Registered devices remain unverified until collection is configured.</Alert>
+    <Alert variant="info" title="Read-only network onboarding">Test SNMPv3 or SSH credentials before saving a device. Connection authentication and recurring telemetry readiness are separate states.</Alert>
     <Panel><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <div><Label htmlFor="device-search">Search devices</Label><Input id="device-search" placeholder="Name, hostname, serial or address" value={search} onChange={(event) => { setSearch(event.target.value); setOffset(0); }} /></div>
       <div><Label htmlFor="device-type">Device type</Label><select id="device-type" className={selectClass} value={type} onChange={(event) => { setType(event.target.value); setOffset(0); }}><option value="">All types</option>{TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
@@ -117,8 +120,15 @@ export function NetworkDevices(): JSX.Element {
     <div className="flex items-center justify-between gap-3"><Button variant="secondary" disabled={offset === 0 || list.isFetching} onClick={() => setOffset(Math.max(0, offset - 20))}>Previous</Button><span className="text-sm">Page {Math.floor(offset / 20) + 1}</span><Button variant="secondary" disabled={list.isFetching || !list.data || offset + 20 >= list.data.pagination.total} onClick={() => setOffset(offset + 20)}>Next</Button></div>
 
     <Dialog open={adding && canWrite} onOpenChange={(open) => { if (!saving) setAdding(open); }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>Add network device</DialogTitle><DialogDescription>Register its identity and management address. Connection and telemetry verification are not available yet.</DialogDescription></DialogHeader>
-        <form onSubmit={save} className="flex flex-col gap-4">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>Add network device</DialogTitle><DialogDescription>Connect through read-only appliance protocols or register an unverified identity.</DialogDescription></DialogHeader>
+        {canConnect && <Button type="button" variant="secondary" disabled={saving} onClick={() => setIdentityOnly(!identityOnly)}>{identityOnly ? 'Test connection before saving' : 'Register identity only'}</Button>}
+        {canConnect && !identityOnly ? <NetworkDeviceWizard onBusyChange={setSaving} onCancel={() => setAdding(false)} onSaved={(created) => {
+          setAdding(false); setSearch(''); setType(''); setSite(''); setGroup(''); setOffset(0);
+          cache.setQueryData(['network-target', created.id, tenantScope], created);
+          void cache.invalidateQueries({ queryKey: ['network-targets'] });
+          openDevice(created); showToast('Device saved with a verified read-only connection.', 'success');
+        }} /> : <form onSubmit={save} className="flex flex-col gap-4">
+          <Alert variant="warning" title="Identity only">Saving here does not verify a connection or enable telemetry.</Alert>
           <div><Label htmlFor="new-tenant">Tenant</Label><select id="new-tenant" name="tenant" required className={selectClass} defaultValue={currentTenantId ?? ''} disabled={saving}><option value="">Choose tenant</option>{tenants.filter((tenant) => !currentTenantId || tenant.id === currentTenantId).map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></div>
           <div className="grid gap-4 sm:grid-cols-2"><div><Label htmlFor="new-name">Device name</Label><Input id="new-name" name="name" required maxLength={255} disabled={saving} placeholder="Lagos branch switch" /></div><div><Label htmlFor="new-type">Device type</Label><select id="new-type" name="type" className={selectClass} defaultValue="switch" disabled={saving}>{TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div></div>
           <div><Label htmlFor="new-address">Management address</Label><Input id="new-address" name="address" required maxLength={253} disabled={saving} placeholder="IP address or DNS name" /><p className="mt-1 text-xs text-text-secondary">Use an IP address or DNS name without a protocol or port.</p></div>
@@ -126,7 +136,7 @@ export function NetworkDevices(): JSX.Element {
           <div className="grid gap-4 sm:grid-cols-2"><div><Label htmlFor="new-site">Site (optional)</Label><Input id="new-site" name="site" maxLength={255} disabled={saving} /></div><div><Label htmlFor="new-group">Group (optional)</Label><Input id="new-group" name="group" maxLength={255} disabled={saving} /></div></div>
           {formError && <Alert variant="critical" title="Unable to register device">{formError}</Alert>}
           <div className="flex justify-end gap-2"><Button type="button" variant="secondary" disabled={saving} onClick={() => setAdding(false)}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save device'}</Button></div>
-        </form>
+        </form>}
       </DialogContent>
     </Dialog>
 
@@ -142,7 +152,8 @@ export function NetworkDevices(): JSX.Element {
           </dl>
           <div className="text-sm"><h3 className="font-semibold">Management addresses</h3>{device.addresses.filter((address) => address.purpose === 'management' && address.current).map((address) => <p key={address.address} className="mt-1 break-all">{address.address} · Source: {address.source} · Confidence: {address.confidence}%</p>)}</div>
           <div className="text-sm"><h3 className="font-semibold">Classification evidence</h3><p className="mt-1">Source: {device.classification.source} · Confidence: {device.classification.confidence}%</p><ul className="mt-2 list-disc space-y-1 pl-5">{device.classification.evidence.map((evidence) => <li key={evidence}>{evidence}</li>)}</ul></div>
-          <p className="text-sm text-text-secondary">{device.capabilities.length ? `Detected capabilities: ${device.capabilities.join(', ')}` : 'No verified capabilities. Protocol discovery and telemetry setup are unavailable.'}</p>
+          <p className="text-sm text-text-secondary">{device.capabilities.length ? `Verified capabilities: ${device.capabilities.join(', ')}` : 'No verified capabilities. Register with a connection test to verify read-only identity access.'}</p>
+          {device.collection_state === 'authenticated' && <Alert variant="info" title="Connection verified">This device passed a one-time read-only identity test. Recurring inventory and telemetry collection are not enabled.</Alert>}
           <Button variant="secondary" onClick={() => setParams({})}>Back to inventory</Button>
         </>}
       </DialogContent>

@@ -1,8 +1,9 @@
 # Network target identity
 
 This implements the identity foundation of issue #257 / sub-issue #258.
-Protocol discovery, credential verification, telemetry binding, and operator
-onboarding screens are subsequent slices (#259–#263).
+The #259 connection workflow is documented in
+[Network device onboarding](network-device-onboarding.md). Recurring telemetry
+and posture remain subsequent slices. The acceptance audit below records #258.
 
 ## Compatibility
 
@@ -62,8 +63,8 @@ collection timestamps are fabricated. This endpoint does not probe a device,
 install an agent, create an enrollment token, or claim inventory readiness.
 
 Unknown creation fields are rejected, including credentials, node links,
-claimed capabilities, and readiness. The next onboarding slice will reference
-credentials through a separate secret system.
+claimed capabilities, and readiness. Verified onboarding uses the separate
+credential-reference and test-receipt endpoints described in the #259 guide.
 
 ## Access control
 
@@ -117,11 +118,10 @@ request; this audit does not require that script.
 
 ## Browser-only guide: register and inspect a network device
 
-This is identity registration, not verified protocol onboarding. The current
-build saves devices through the real target API and shows them in the console.
-SNMPv3/SSH credentials, connection tests, vendor fingerprinting and telemetry
-collection are still outstanding in #259–#261. This flow is available in the
-local build; it has not been deployed to production.
+This guide describes the **Register identity only** option. For SNMPv3/SSH
+connection verification and fingerprinting, use the #259 guide linked above.
+Recurring telemetry collection remains outstanding. This flow is available
+in the local build; it has not been deployed to production.
 
 1. Open the existing app at `http://192.168.1.56:4173/console/login` and sign in
    with your existing operator/admin account. A production user uses their
@@ -129,7 +129,7 @@ local build; it has not been deployed to production.
 2. Select the intended tenant in the top tenant selector.
 3. Click **Network devices** under Operations in the sidebar. Alternatively,
    click **Enroll**, then **Add network device** on the enrollment page.
-4. Click **Add network device** in the inventory. Check the **Tenant** field.
+4. Click **Add network device**, then **Register identity only**. Check **Tenant**.
    In All tenants scope you must choose a specific tenant to own the device.
 5. Enter a **Device name**, choose **Device type**, and enter its **Management
    address** as an IP address or DNS name without a protocol or port. Optional

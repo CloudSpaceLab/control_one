@@ -191,6 +191,10 @@ func TestTargetIdentityWithPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, strings.Contains(cols, "password"))
 	// Exercise rollback and backfill with a node created before target identity.
+	onboardingDown, err := os.ReadFile("../migrate/sql/0159_network_onboarding.down.sql")
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, string(onboardingDown))
+	require.NoError(t, err)
 	down, err := os.ReadFile("../migrate/sql/0158_target_identity.down.sql")
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, string(down))
@@ -206,6 +210,10 @@ func TestTargetIdentityWithPostgres(t *testing.T) {
 	require.NotNil(t, target)
 	require.Equal(t, "workstation", target.Type)
 	require.Equal(t, legacy.ID, *target.NodeID)
+	onboardingUp, err := os.ReadFile("../migrate/sql/0159_network_onboarding.up.sql")
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, string(onboardingUp))
+	require.NoError(t, err)
 }
 
 // Checking registry credentials is not a Docker availability check: public

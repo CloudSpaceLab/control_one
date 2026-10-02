@@ -297,7 +297,18 @@ func (s *Store) CreateNetworkTarget(ctx context.Context, p NetworkTargetParams, 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	id, now := uuid.New(), s.clock().UTC()
+	target, err := createNetworkTargetTx(ctx, tx, p, access, s.clock().UTC())
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return target, nil
+}
+
+func createNetworkTargetTx(ctx context.Context, tx *sql.Tx, p NetworkTargetParams, access TargetAccess, now time.Time) (*Target, error) {
+	id := uuid.New()
 	classification := TargetClassification{Source: "operator", Confidence: 100, Evidence: []string{"operator-selected device type; not protocol verified"}}
 	raw, err := json.Marshal(classification)
 	if err != nil {
@@ -320,9 +331,6 @@ func (s *Store) CreateNetworkTarget(ctx context.Context, p NetworkTargetParams, 
 	// Return inside the transaction; write-only operators can see their creation receipt.
 	target, err := scanTarget(tx.QueryRowContext(ctx, targetSelect+" WHERE t.id = $1", id))
 	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return target, nil
