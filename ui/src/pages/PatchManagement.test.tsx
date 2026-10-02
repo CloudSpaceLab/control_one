@@ -1,10 +1,11 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MaintenanceWindow, PatchApproval, PatchDeployment, SquidProxy } from '../lib/api';
+import type { MaintenanceWindow, PatchApproval, PatchDeployment, PatchPosture, SquidProxy } from '../lib/api';
 import { PatchManagement } from './PatchManagement';
 
 const mocks = vi.hoisted(() => {
+  const getPatchPosture = vi.fn();
   const listPatchDeployments = vi.fn();
   const listSquidProxies = vi.fn();
   const listMaintenanceWindows = vi.fn();
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => {
   const toastError = vi.fn();
 
   return {
+    getPatchPosture,
     listPatchDeployments,
     listSquidProxies,
     listMaintenanceWindows,
@@ -28,6 +30,7 @@ const mocks = vi.hoisted(() => {
     toastSuccess,
     toastError,
     apiClient: {
+      getPatchPosture: (tenantId: string) => getPatchPosture(tenantId),
       listPatchDeployments: (params: unknown) => listPatchDeployments(params),
       listSquidProxies: (tenantId: string) => listSquidProxies(tenantId),
       listMaintenanceWindows: (tenantId: string) => listMaintenanceWindows(tenantId),
@@ -54,6 +57,33 @@ vi.mock('sonner', () => ({
     error: mocks.toastError,
   },
 }));
+
+const samplePosture: PatchPosture = {
+  active_nodes: 12,
+  inventory_nodes: 11,
+  known_affected_nodes: 3,
+  known_active_findings: 7,
+  known_critical_findings: 2,
+  known_high_findings: 3,
+  known_kev_findings: 1,
+  known_patchable_findings: 5,
+  deployments_total: 14,
+  deployments_pending: 1,
+  deployments_in_progress: 1,
+  deployments_completed: 10,
+  deployments_partial: 1,
+  deployments_failed: 1,
+  pending_approvals: 2,
+  expired_approvals: 1,
+  windows_scheduled: 1,
+  windows_open: 0,
+  windows_closing: 0,
+  proxies_healthy: 1,
+  proxies_degraded: 0,
+  direct_nodes: 9,
+  proxy_nodes: 2,
+  airgapped_nodes: 1,
+};
 
 const sampleDeployment: PatchDeployment = {
   ID: 'deployment-1',
@@ -104,6 +134,7 @@ const sampleApproval: PatchApproval = {
 describe('PatchManagement', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.getPatchPosture.mockResolvedValue({ data: samplePosture, generated_at: '2026-06-08T00:00:00Z' });
     mocks.listPatchDeployments.mockResolvedValue({ deployments: [], generated_at: '2026-06-08T00:00:00Z' });
     mocks.listSquidProxies.mockResolvedValue({ proxies: [] });
     mocks.listMaintenanceWindows.mockResolvedValue({ windows: [] });
@@ -116,6 +147,23 @@ describe('PatchManagement', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('shows authoritative posture independently of the bounded deployment list', async () => {
+    const deployments = Array.from({ length: 50 }, (_, index) => ({
+      ...sampleDeployment,
+      ID: `deployment-${index}`,
+      Status: index === 0 ? 'failed' as const : 'completed' as const,
+    }));
+    mocks.listPatchDeployments.mockResolvedValue({ deployments, generated_at: '2026-06-08T00:00:00Z' });
+
+    render(<PatchManagement />);
+
+    expect(await screen.findByText('11 / 12')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('Recent deployment activity · latest 50')).toBeInTheDocument();
+    expect(screen.getByText('50')).toBeInTheDocument();
   });
 
   it('shows explicit unavailable states for partial patch-management load failures', async () => {
