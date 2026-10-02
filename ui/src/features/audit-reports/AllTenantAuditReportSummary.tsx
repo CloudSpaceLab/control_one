@@ -33,16 +33,19 @@ export function AllTenantAuditReportSummary() {
           limit: 1,
           offset: 0,
         });
+        const latest: AuditReport | null = response.data.length > 0
+          ? response.data[0]
+          : null;
         return {
           tenant,
           total: response.pagination.total,
-          latest: response.data[0] ?? null,
+          latest,
         } satisfies TenantReportSummary;
       },
       6,
     ).then((results) => {
       if (cancelled) return;
-      setRows(results.flatMap((result, index) => {
+      setRows(results.flatMap<TenantReportSummary>((result, index) => {
         if (result.status === 'fulfilled') return [result.value];
         const tenant = tenants[index];
         if (!tenant) return [];
