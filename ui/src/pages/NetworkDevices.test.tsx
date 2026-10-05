@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NetworkDevices } from './NetworkDevices';
@@ -23,8 +23,9 @@ const device = {
   addresses: [{ address: '192.0.2.30', purpose: 'management', current: true, source: 'operator', confidence: 100 }],
   classification: { source: 'operator', confidence: 100, evidence: ['Operator-selected type; not protocol verified'] },
 };
-function mount() {
-  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><NetworkDevices /></MemoryRouter></QueryClientProvider>);
+function CurrentUrl() { const location = useLocation(); return <output data-testid="current-url">{location.search}</output>; }
+function mount(initialEntries = ['/network-devices']) {
+  return render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter initialEntries={initialEntries}><CurrentUrl /><NetworkDevices /></MemoryRouter></QueryClientProvider>);
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.tenant = 'tenant-a'; mocks.permissions = ['targets.read', 'targets.write'];
@@ -64,6 +65,28 @@ describe('Network device workflow', () => {
     await waitFor(() => expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ offset: 20 })));
     await user.selectOptions(screen.getByLabelText('Device type'), 'firewall');
     await waitFor(() => expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ offset: 0, type: 'firewall' })));
+    await user.type(screen.getByLabelText('Vendor'), 'Cisco');
+    await waitFor(() => expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ vendor: 'Cisco', tenantId: undefined })));
+    await user.selectOptions(screen.getByLabelText('Telemetry / collection state'), 'stale');
+    await waitFor(() => expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ collectionState: 'stale', offset: 0 })));
+    expect(screen.getByTestId('current-url')).toHaveTextContent('vendor=Cisco');
+    expect(screen.getByTestId('current-url')).toHaveTextContent('collection_state=stale');
+  });
+  it('opens related workflows from a target detail deep link', async () => {
+    mount(['/network-devices?device=switch-1']);
+    expect(await screen.findByText('Agentless')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Search events' })).toHaveAttribute('href', '/search?q=Branch%20switch');
+    expect(screen.getByRole('link', { name: 'Open cases' })).toHaveAttribute('href', '/cases');
+    expect(screen.getByRole('link', { name: 'Observability' })).toHaveAttribute('href', '/observability');
+  });
+  it('shows stale and unverified state as actionable inventory attention', async () => {
+    mocks.list.mockResolvedValue({ data: [
+      { ...device, id: 'stale-switch', reachability_state: 'reachable', collection_state: 'stale' },
+      { ...device, id: 'unverified-switch', reachability_state: 'unknown', collection_state: 'discovered' },
+    ], pagination: { total: 2, count: 2, limit: 20, offset: 0 } });
+    mount();
+    expect(await screen.findByText('Collection stale')).toBeInTheDocument();
+    expect(screen.getAllByText('Not verified').length).toBeGreaterThan(0);
   });
   it('shows inventory but hides creation from users without write permission', async () => {
     mocks.permissions = ['targets.read']; mount();

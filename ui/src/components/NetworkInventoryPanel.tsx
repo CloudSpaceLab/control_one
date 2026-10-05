@@ -41,6 +41,7 @@ export function NetworkInventoryPanel({ targetId, canRefresh, supportsSNMP }: { 
       <p>Snapshot observed: {time(snapshot.observed_at)} · Adapter: {snapshot.adapter}. Inventory refresh is manual. Recurring collection readiness is shown under Network telemetry sources.</p>
       <Facts facts={snapshot.facts} />
       <Records title="Interfaces" records={snapshot.interfaces} />
+      <p className="text-xs text-text-secondary">Topology is limited to protocol-reported LLDP/CDP neighbors below. No location-based or inferred links are added; each fact retains its protocol, source, and observation time.</p>
       <Records title="LLDP / CDP neighbors" records={snapshot.neighbors} />
       <Records title="Chassis / modules" records={snapshot.entities} />
       <Records title="IP addresses" records={snapshot.addresses} />

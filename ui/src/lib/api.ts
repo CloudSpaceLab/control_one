@@ -118,6 +118,12 @@ export interface ListNetworkTargetsParams {
   type?: string;
   site?: string;
   group?: string;
+  vendor?: string;
+  model?: string;
+  platform?: string;
+  firmware?: string;
+  reachabilityState?: string;
+  collectionState?: string;
   limit?: number;
   offset?: number;
 }
@@ -2790,8 +2796,14 @@ export class APIClient {
   async listNetworkTargets(options: ListNetworkTargetsParams = {}): Promise<PaginatedResponse<NetworkTarget>> {
     const search = new URLSearchParams({ family: 'network_security' });
     if (options.tenantId) search.set('tenant_id', options.tenantId);
-    for (const key of ['search', 'type', 'site', 'group'] as const) {
-      if (options[key]) search.set(key, options[key]!);
+    const filters: Array<[keyof ListNetworkTargetsParams, string]> = [
+      ['search', 'search'], ['type', 'type'], ['site', 'site'], ['group', 'group'],
+      ['vendor', 'vendor'], ['model', 'model'], ['platform', 'platform'], ['firmware', 'firmware'],
+      ['reachabilityState', 'reachability_state'], ['collectionState', 'collection_state'],
+    ];
+    for (const [option, parameter] of filters) {
+      const value = options[option];
+      if (typeof value === 'string' && value.trim()) search.set(parameter, value.trim());
     }
     search.set('limit', String(options.limit ?? 20));
     search.set('offset', String(options.offset ?? 0));

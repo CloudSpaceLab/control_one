@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Network, Plus, RefreshCw } from 'lucide-react';
@@ -27,6 +27,13 @@ const selectClass = 'h-10 w-full rounded-md border border-border-subtle bg-surfa
 const message = (err: unknown) => err instanceof Error ? err.message : 'Unable to load network devices.';
 const typeName = (value: string) => TYPES.find(([key]) => key === value)?.[1] ?? value;
 const when = (value?: string) => value ? new Date(value).toLocaleString() : 'Never';
+const attention = (target: NetworkTarget) => {
+  if (target.reachability_state === 'unreachable') return 'Unreachable';
+  if (target.collection_state === 'stale') return 'Collection stale';
+  if (target.collection_state === 'authenticated' && !target.last_successful_collection_at) return 'Inventory not collected';
+  if (target.reachability_state === 'unknown' || target.collection_state === 'discovered') return 'Not verified';
+  return '—';
+};
 
 export function NetworkDevices(): JSX.Element {
   const api = useApiClient();
@@ -37,11 +44,17 @@ export function NetworkDevices(): JSX.Element {
   const [params, setParams] = useSearchParams();
   const selectedId = params.get('device');
   const [adding, setAdding] = useState(params.get('add') === '1');
-  const [search, setSearch] = useState('');
-  const [type, setType] = useState('');
-  const [site, setSite] = useState('');
-  const [group, setGroup] = useState('');
-  const [offset, setOffset] = useState(0);
+  const [search, setSearch] = useState(params.get('search') ?? '');
+  const [type, setType] = useState(params.get('type') ?? '');
+  const [site, setSite] = useState(params.get('site') ?? '');
+  const [group, setGroup] = useState(params.get('group') ?? '');
+  const [vendor, setVendor] = useState(params.get('vendor') ?? '');
+  const [model, setModel] = useState(params.get('model') ?? '');
+  const [platform, setPlatform] = useState(params.get('platform') ?? '');
+  const [firmware, setFirmware] = useState(params.get('firmware') ?? '');
+  const [reachability, setReachability] = useState(params.get('reachability_state') ?? '');
+  const [collection, setCollection] = useState(params.get('collection_state') ?? '');
+  const [offset, setOffset] = useState(Number(params.get('offset') ?? 0));
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [identityOnly, setIdentityOnly] = useState(false);
@@ -49,17 +62,36 @@ export function NetworkDevices(): JSX.Element {
   const canConnect = profile?.permissions?.includes('targets.connect') ?? profile?.roles.some((role) => ['admin', 'operator'].includes(role)) ?? false;
   const tenantScope = currentTenantId ?? undefined;
   const previousTenant = useRef(currentTenantId);
+  const resetFilters = useCallback(() => {
+    setSearch(''); setType(''); setSite(''); setGroup(''); setVendor(''); setModel('');
+    setPlatform(''); setFirmware(''); setReachability(''); setCollection(''); setOffset(0);
+    setParams({}, { replace: true });
+  }, [setParams]);
+  const filterKey = params.toString();
+  useEffect(() => {
+    const current = new URLSearchParams(filterKey);
+    setSearch(current.get('search') ?? ''); setType(current.get('type') ?? '');
+    setSite(current.get('site') ?? ''); setGroup(current.get('group') ?? '');
+    setVendor(current.get('vendor') ?? ''); setModel(current.get('model') ?? '');
+    setPlatform(current.get('platform') ?? ''); setFirmware(current.get('firmware') ?? '');
+    setReachability(current.get('reachability_state') ?? ''); setCollection(current.get('collection_state') ?? '');
+    setOffset(Number(current.get('offset') ?? 0));
+  }, [filterKey]);
   // A tenant switch clears an open detail from the previous scope.
   useEffect(() => {
     if (previousTenant.current !== currentTenantId) {
       previousTenant.current = currentTenantId;
-      setOffset(0); setParams({}, { replace: true });
+      resetFilters();
       setAdding(false);
     }
-  }, [currentTenantId, setParams]);
+  }, [currentTenantId, resetFilters]);
   const list = useQuery({
-    queryKey: ['network-targets', tenantScope, search, type, site, group, offset],
-    queryFn: () => api.listNetworkTargets({ tenantId: tenantScope, search: search.trim(), type, site: site.trim(), group: group.trim(), limit: 20, offset }),
+    queryKey: ['network-targets', tenantScope, search, type, site, group, vendor, model, platform, firmware, reachability, collection, offset],
+    queryFn: () => api.listNetworkTargets({
+      tenantId: tenantScope, search: search.trim(), type, site: site.trim(), group: group.trim(),
+      vendor: vendor.trim(), model: model.trim(), platform: platform.trim(), firmware: firmware.trim(),
+      reachabilityState: reachability, collectionState: collection, limit: 20, offset,
+    }),
   });
   const detail = useQuery({
     queryKey: ['network-target', selectedId, tenantScope],
@@ -68,16 +100,37 @@ export function NetworkDevices(): JSX.Element {
   });
   const device = detail.data?.family === 'network_security' && (!currentTenantId || detail.data.tenant_id === currentTenantId) ? detail.data : undefined;
   const tenantName = (id: string) => tenants.find((tenant) => tenant.id === id)?.name ?? id;
-  const openDevice = (target: NetworkTarget) => setParams({ device: target.id });
+  const updateFilter = (key: string, value: string, update: (value: string) => void) => {
+    update(value);
+    setOffset(0);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (value.trim()) next.set(key, value.trim()); else next.delete(key);
+      next.delete('offset');
+      return next;
+    }, { replace: true });
+  };
+  const changePage = (nextOffset: number) => {
+    setOffset(nextOffset);
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (nextOffset > 0) next.set('offset', String(nextOffset)); else next.delete('offset');
+      return next;
+    }, { replace: true });
+  };
+  const openDevice = (target: NetworkTarget) => setParams((current) => { const next = new URLSearchParams(current); next.set('device', target.id); return next; });
   const columns: ColumnDef<NetworkTarget, unknown>[] = [
     { id: 'device', header: 'Device', enableSorting: false, cell: ({ row }) => <Button variant="ghost" onClick={() => openDevice(row.original)}>{row.original.display_name}</Button> },
     { id: 'type', header: 'Type', enableSorting: false, cell: ({ row }) => typeName(row.original.type) },
     { id: 'tenant', header: 'Tenant', enableSorting: false, cell: ({ row }) => tenantName(row.original.tenant_id) },
+    { id: 'vendor-model', header: 'Vendor / model', enableSorting: false, cell: ({ row }) => [row.original.vendor, row.original.model].filter(Boolean).join(' / ') || 'Not detected' },
     { id: 'site', header: 'Site / group', enableSorting: false, cell: ({ row }) => [row.original.site, row.original.group].filter(Boolean).join(' / ') || '—' },
     { id: 'address', header: 'Management address', enableSorting: false, cell: ({ row }) => row.original.addresses.filter((address) => address.current && address.purpose === 'management').map((address) => address.address).join(', ') || '—' },
+    { id: 'platform-firmware', header: 'Platform / firmware', enableSorting: false, cell: ({ row }) => [row.original.platform, row.original.firmware].filter(Boolean).join(' / ') || 'Not detected' },
     { id: 'reachability', header: 'Reachability', enableSorting: false, cell: ({ row }) => row.original.reachability_state === 'unknown' ? 'Not verified' : row.original.reachability_state },
     { id: 'collection', header: 'Collection', enableSorting: false, cell: ({ row }) => row.original.collection_state.replaceAll('_', ' ') },
     { id: 'observed', header: 'Last observed', enableSorting: false, cell: ({ row }) => when(row.original.last_observed_at) },
+    { id: 'attention', header: 'Attention', enableSorting: false, cell: ({ row }) => attention(row.original) },
   ];
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -96,7 +149,7 @@ export function NetworkDevices(): JSX.Element {
         management_addresses: [value('address')],
       });
       setAdding(false);
-      setSearch(''); setType(''); setSite(''); setGroup(''); setOffset(0);
+      resetFilters();
       cache.setQueryData(['network-target', created.id, tenantScope], created);
       await cache.invalidateQueries({ queryKey: ['network-targets'] });
       openDevice(created);
@@ -110,22 +163,28 @@ export function NetworkDevices(): JSX.Element {
       actions={<><Button variant="secondary" onClick={() => list.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>{canWrite && <Button onClick={() => { setFormError(null); setAdding(true); }}><Plus className="mr-2 h-4 w-4" />Add network device</Button>}</>} />
     <Alert variant="info" title="Read-only network onboarding">Test SNMPv3 or SSH credentials before saving a device. Connection authentication and recurring telemetry readiness are separate states.</Alert>
     <Panel><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <div><Label htmlFor="device-search">Search devices</Label><Input id="device-search" placeholder="Name, hostname, serial or address" value={search} onChange={(event) => { setSearch(event.target.value); setOffset(0); }} /></div>
-      <div><Label htmlFor="device-type">Device type</Label><select id="device-type" className={selectClass} value={type} onChange={(event) => { setType(event.target.value); setOffset(0); }}><option value="">All types</option>{TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
-      <div><Label htmlFor="device-site">Site</Label><Input id="device-site" value={site} onChange={(event) => { setSite(event.target.value); setOffset(0); }} /></div>
-      <div><Label htmlFor="device-group">Group</Label><Input id="device-group" value={group} onChange={(event) => { setGroup(event.target.value); setOffset(0); }} /></div>
+      <div><Label htmlFor="device-search">Search devices</Label><Input id="device-search" placeholder="Name, hostname, serial or address" value={search} onChange={(event) => updateFilter('search', event.target.value, setSearch)} /></div>
+      <div><Label htmlFor="device-type">Device type</Label><select id="device-type" className={selectClass} value={type} onChange={(event) => updateFilter('type', event.target.value, setType)}><option value="">All types</option>{TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>
+      <div><Label htmlFor="device-site">Site</Label><Input id="device-site" value={site} onChange={(event) => updateFilter('site', event.target.value, setSite)} /></div>
+      <div><Label htmlFor="device-group">Group</Label><Input id="device-group" value={group} onChange={(event) => updateFilter('group', event.target.value, setGroup)} /></div>
+      <div><Label htmlFor="device-vendor">Vendor</Label><Input id="device-vendor" value={vendor} onChange={(event) => updateFilter('vendor', event.target.value, setVendor)} /></div>
+      <div><Label htmlFor="device-model">Model</Label><Input id="device-model" value={model} onChange={(event) => updateFilter('model', event.target.value, setModel)} /></div>
+      <div><Label htmlFor="device-platform">Platform</Label><Input id="device-platform" value={platform} onChange={(event) => updateFilter('platform', event.target.value, setPlatform)} /></div>
+      <div><Label htmlFor="device-firmware">Firmware</Label><Input id="device-firmware" value={firmware} onChange={(event) => updateFilter('firmware', event.target.value, setFirmware)} /></div>
+      <div><Label htmlFor="device-reachability">Reachability</Label><select id="device-reachability" className={selectClass} value={reachability} onChange={(event) => updateFilter('reachability_state', event.target.value, setReachability)}><option value="">All states</option><option value="unknown">Not verified</option><option value="reachable">Reachable</option><option value="unreachable">Unreachable</option></select></div>
+      <div><Label htmlFor="device-collection">Telemetry / collection state</Label><select id="device-collection" className={selectClass} value={collection} onChange={(event) => updateFilter('collection_state', event.target.value, setCollection)}><option value="">All states</option><option value="discovered">Discovered</option><option value="reachable">Reachable</option><option value="authenticated">Authenticated</option><option value="inventory_ready">Inventory ready</option><option value="telemetry_partial">Telemetry partial</option><option value="telemetry_ready">Telemetry ready</option><option value="stale">Stale</option><option value="auth_failed">Authentication failed</option><option value="unreachable">Unreachable</option><option value="unsupported">Unsupported</option><option value="policy_blocked">Policy blocked</option></select></div>
     </div></Panel>
     <p className="text-sm text-text-secondary">{currentTenantId ? tenantName(currentTenantId) : 'All tenants'} · {list.data?.pagination.total ?? 0} devices</p>
     {list.error && <Alert variant="critical" title="Inventory unavailable">{message(list.error)}</Alert>}
     <DataTable columns={columns} rows={list.data?.data ?? []} rowKey={(target) => target.id} loading={list.isFetching}
       empty={<EmptyState icon={<Network />} title="No network devices" description="Register a device or adjust your filters." />} />
-    <div className="flex items-center justify-between gap-3"><Button variant="secondary" disabled={offset === 0 || list.isFetching} onClick={() => setOffset(Math.max(0, offset - 20))}>Previous</Button><span className="text-sm">Page {Math.floor(offset / 20) + 1}</span><Button variant="secondary" disabled={list.isFetching || !list.data || offset + 20 >= list.data.pagination.total} onClick={() => setOffset(offset + 20)}>Next</Button></div>
+    <div className="flex items-center justify-between gap-3"><Button variant="secondary" disabled={offset === 0 || list.isFetching} onClick={() => changePage(Math.max(0, offset - 20))}>Previous</Button><span className="text-sm">Page {Math.floor(offset / 20) + 1}</span><Button variant="secondary" disabled={list.isFetching || !list.data || offset + 20 >= list.data.pagination.total} onClick={() => changePage(offset + 20)}>Next</Button></div>
 
     <Dialog open={adding && canWrite} onOpenChange={(open) => { if (!saving) setAdding(open); }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>Add network device</DialogTitle><DialogDescription>Connect through read-only appliance protocols or register an unverified identity.</DialogDescription></DialogHeader>
         {canConnect && <Button type="button" variant="secondary" disabled={saving} onClick={() => setIdentityOnly(!identityOnly)}>{identityOnly ? 'Test connection before saving' : 'Register identity only'}</Button>}
         {canConnect && !identityOnly ? <NetworkDeviceWizard onBusyChange={setSaving} onCancel={() => setAdding(false)} onSaved={(created) => {
-          setAdding(false); setSearch(''); setType(''); setSite(''); setGroup(''); setOffset(0);
+          setAdding(false); resetFilters();
           cache.setQueryData(['network-target', created.id, tenantScope], created);
           void cache.invalidateQueries({ queryKey: ['network-targets'] });
           openDevice(created); showToast('Device saved with a verified read-only connection.', 'success');
@@ -142,7 +201,7 @@ export function NetworkDevices(): JSX.Element {
       </DialogContent>
     </Dialog>
 
-    <Dialog open={!!selectedId} onOpenChange={(open) => { if (!open) setParams({}); }}>
+    <Dialog open={!!selectedId} onOpenChange={(open) => { if (!open) setParams((current) => { const next = new URLSearchParams(current); next.delete('device'); return next; }); }}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{device?.display_name ?? 'Device details'}</DialogTitle><DialogDescription>Network &amp; security · {device ? typeName(device.type) : 'Loading identity'}</DialogDescription></DialogHeader>
         {detail.isLoading && <p>Loading device…</p>}
         {detail.error && <Alert variant="critical">{message(detail.error)}</Alert>}
@@ -158,7 +217,12 @@ export function NetworkDevices(): JSX.Element {
           {device.collection_state === 'authenticated' && <Alert variant="info" title="Connection verified">This device passed a one-time read-only identity test. Recurring inventory and telemetry collection are not enabled.</Alert>}
           <NetworkInventoryPanel key={device.id} targetId={device.id} canRefresh={canConnect} supportsSNMP={device.management_modes?.includes('snmpv3') ?? false} />
           <NetworkTelemetryPanel key={`telemetry-${device.id}`} targetId={device.id} tenantId={device.tenant_id} site={device.site} canConfigure={canWrite} />
-          <Button variant="secondary" onClick={() => setParams({})}>Back to inventory</Button>
+          <div className="flex flex-wrap gap-3 border-t border-border-subtle pt-4" aria-label="Related device workflows">
+            <Link className="underline" to={`/search?q=${encodeURIComponent(device.display_name)}`}>Search events</Link>
+            <Link className="underline" to="/cases">Open cases</Link>
+            <Link className="underline" to="/observability">Observability</Link>
+          </div>
+          <Button variant="secondary" onClick={() => setParams((current) => { const next = new URLSearchParams(current); next.delete('device'); return next; })}>Back to inventory</Button>
         </>}
       </DialogContent>
     </Dialog>
