@@ -7,6 +7,7 @@ const HTTP_STATUS_UNAUTHORIZED = 401;
 export type HypervisorProvider = "aws" | "azure" | "vmware" | "libvirt";
 
 export interface NetworkTarget {
+	management_modes: string[];
   id: string;
   tenant_id: string;
   node_id?: string;
@@ -40,6 +41,40 @@ export interface CreateNetworkTargetPayload {
   site?: string;
   group?: string;
   management_addresses: string[];
+}
+
+export interface NetworkInventoryFact {
+  value: unknown;
+  protocol: string;
+  source: string;
+  observed_at: string;
+}
+export interface NetworkInventoryRecord {
+  id: string;
+  facts: Record<string, NetworkInventoryFact>;
+}
+export interface NetworkInventorySnapshot {
+  state: string;
+  adapter: string;
+  observed_at: string;
+  facts: Record<string, NetworkInventoryFact>;
+  interfaces: NetworkInventoryRecord[];
+  neighbors: NetworkInventoryRecord[];
+  entities: NetworkInventoryRecord[];
+  addresses: NetworkInventoryRecord[];
+  vlans: NetworkInventoryRecord[];
+  arp: NetworkInventoryRecord[];
+  routes: NetworkInventoryRecord[];
+  resources: NetworkInventoryRecord[];
+  unavailable: string[];
+  raw_evidence: NetworkInventoryRecord[];
+}
+export interface NetworkInventoryStatus {
+  target_id: string;
+  state: string;
+  attempted_at?: string;
+  completed_at?: string;
+  snapshot?: NetworkInventorySnapshot;
 }
 
 export interface NetworkCredentialConfig {
@@ -2782,6 +2817,14 @@ export class APIClient {
 
   async getNetworkTarget(id: string): Promise<NetworkTarget> {
     return this.request<NetworkTarget>(`/api/v1/targets/${encodeURIComponent(id)}`);
+  }
+
+  async getNetworkInventory(id: string): Promise<NetworkInventoryStatus> {
+    return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`);
+  }
+
+  async refreshNetworkInventory(id: string): Promise<NetworkInventoryStatus> {
+    return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`, { method: 'POST', body: '{}' });
   }
 
   async listNodes(

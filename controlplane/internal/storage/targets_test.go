@@ -191,6 +191,10 @@ func TestTargetIdentityWithPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, strings.Contains(cols, "password"))
 	// Exercise rollback and backfill with a node created before target identity.
+	inventoryDown, err := os.ReadFile("../migrate/sql/0160_network_inventory.down.sql")
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, string(inventoryDown))
+	require.NoError(t, err)
 	onboardingDown, err := os.ReadFile("../migrate/sql/0159_network_onboarding.down.sql")
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, string(onboardingDown))
@@ -213,6 +217,10 @@ func TestTargetIdentityWithPostgres(t *testing.T) {
 	onboardingUp, err := os.ReadFile("../migrate/sql/0159_network_onboarding.up.sql")
 	require.NoError(t, err)
 	_, err = s.db.ExecContext(ctx, string(onboardingUp))
+	require.NoError(t, err)
+	inventoryUp, err := os.ReadFile("../migrate/sql/0160_network_inventory.up.sql")
+	require.NoError(t, err)
+	_, err = s.db.ExecContext(ctx, string(inventoryUp))
 	require.NoError(t, err)
 }
 

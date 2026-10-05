@@ -47,6 +47,23 @@ func TestSNMPv3WithNetSNMP(t *testing.T) {
 	require.Equal(t, "Cisco", result.Vendor)
 	require.Equal(t, "C9300-48P", result.Model)
 	require.Equal(t, []string{"snmp_identity"}, result.Capabilities)
+	// The identity is synthetic; these are Linux container interfaces, not
+	// Cisco switch ports. This exercises actual SNMPv3 GET/BULKWALK transport.
+	inventory := Refresh(ctx, host, port.Int(), "snmpv3", credential)
+	require.Equal(t, "inventory_ready", inventory.State)
+	require.Equal(t, "synthetic-cisco-container-fixture", inventory.Facts["hostname"].Value)
+	require.NotEmpty(t, inventory.Interfaces)
+	seen := map[string]bool{}
+	for _, item := range inventory.Interfaces {
+		require.False(t, seen[item.ID])
+		seen[item.ID] = true
+		require.Equal(t, "snmpv3", item.Facts["index"].Protocol)
+	}
+	again := Refresh(ctx, host, port.Int(), "snmpv3", credential)
+	require.Equal(t, len(inventory.Interfaces), len(again.Interfaces))
+	for index := range inventory.Interfaces {
+		require.Equal(t, inventory.Interfaces[index].ID, again.Interfaces[index].ID)
+	}
 	credential.Username = "fixture-unknown-user"
 	result = probeSNMP(ctx, host, port.Int(), credential)
 	require.Equal(t, "auth_failed", result.State)

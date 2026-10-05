@@ -952,8 +952,9 @@ type Server struct {
 	auditAsync bool
 	// sealer encrypts provider credentials at rest. nil means secrets
 	// encryption is not configured — mutating endpoints must refuse to write.
-	sealer       *secretbox.Sealer
-	networkProbe func(context.Context, string, int, string, networkdevice.Credential) networkdevice.Result
+	sealer           *secretbox.Sealer
+	networkProbe     func(context.Context, string, int, string, networkdevice.Credential) networkdevice.Result
+	networkInventory func(context.Context, string, int, string, networkdevice.Credential) networkdevice.Inventory
 	// smtpSend is replaceable in tests. Production uses sendSMTPMessage.
 	smtpSend func(context.Context, storage.SMTPSettings, string, []string) error
 	// Alert email hooks keep delivery deterministic in tests. Production sends
@@ -1175,6 +1176,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/targets", s.handleTargetsCollection)
 	s.baseRouter.HandleFunc("/api/v1/targets/", s.handleTargetResource)
 	s.baseRouter.HandleFunc("/api/v1/network-onboarding/", s.handleNetworkOnboarding)
+	s.baseRouter.HandleFunc("/api/v1/network-inventory/", s.handleNetworkInventory)
 	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
 	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
 	s.baseRouter.HandleFunc("/api/v1/ai/test", s.handleAITest)

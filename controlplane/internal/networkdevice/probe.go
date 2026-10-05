@@ -5,7 +5,6 @@ package networkdevice
 import (
 	"context"
 	"errors"
-
 	"io"
 	"net"
 	"regexp"
@@ -131,13 +130,15 @@ func Resolve(ctx context.Context, host string, allowedCIDRs []string) (string, e
 // and vendor API adapters must return normalized, secret-free evidence and
 // declare their required privileges before being exposed by onboarding.
 type Adapter struct {
-	RequiredPrivileges string
-	Probe              func(context.Context, string, int, Credential) Result
+	RequiredPrivileges  string
+	InventoryPrivileges string
+	Probe               func(context.Context, string, int, Credential) Result
+	Inventory           func(context.Context, string, int, Credential) Inventory
 }
 
 var adapters = map[string]Adapter{
 	"ssh":    {RequiredPrivileges: "Read-only login permitted to execute show version; no enable/config privileges.", Probe: probeSSH},
-	"snmpv3": {RequiredPrivileges: "SNMPv3 authPriv user with read-only access to sysDescr and sysObjectID.", Probe: probeSNMP},
+	"snmpv3": {RequiredPrivileges: "SNMPv3 authPriv user with read-only access to sysDescr and sysObjectID.", InventoryPrivileges: "Read-only system, IF/IF-X, ENTITY/SENSOR, LLDP/CDP, IP, Q-BRIDGE and HOST-RESOURCES MIB access where exposed. No SET permissions.", Probe: probeSNMP, Inventory: collectSNMPInventory},
 }
 
 func Probe(ctx context.Context, ip string, port int, protocol string, credential Credential) Result {
@@ -324,6 +325,8 @@ func Fingerprint(description, oid string, c Credential) Result {
 		r.Evidence = []string{"Cisco vendor signature in protocol identity"}
 		if strings.Contains(lower, "ios xe") || strings.Contains(lower, "ios-xe") {
 			r.Platform = "IOS XE"
+		} else if strings.Contains(lower, "ios software") || strings.Contains(lower, "internetwork operating system") {
+			r.Platform = "IOS"
 		}
 		if strings.Contains(lower, "nx-os") {
 			r.Platform = "NX-OS"
@@ -360,6 +363,12 @@ func Fingerprint(description, oid string, c Credential) Result {
 		r.SuggestedType = "firewall"
 		r.Confidence = 90
 		r.Evidence = []string{"PAN-OS signature in protocol identity"}
+	case strings.Contains(lower, "big-ip"):
+		r.Vendor = "F5"
+		r.Platform = "BIG-IP"
+		r.SuggestedType = "load_balancer"
+		r.Confidence = 80
+		r.Evidence = []string{"BIG-IP signature in protocol identity"}
 	default:
 		r.Evidence = []string{"Authenticated protocol identity; no supported vendor signature. Operator review required."}
 	}

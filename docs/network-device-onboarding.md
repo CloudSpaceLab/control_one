@@ -42,6 +42,9 @@ through **Register identity only** and clearly identifies unverified records.
    `authenticated`, detected identity, and classification provenance.
    **Last successful collection: Never** remains accurate until a subsequent
    collection implementation actually collects data.
+   Manual SNMPv3 inventory refresh is now available through the separate
+   [#260 inventory flow](network-device-inventory.md). It does not enable
+   recurring polling.
 10. Return to inventory and use search/type/site/group filters. Compute
     enrollment remains under **Servers/Enroll** with its existing agent flow.
 

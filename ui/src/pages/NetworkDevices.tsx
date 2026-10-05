@@ -14,6 +14,7 @@ import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import type { NetworkTarget } from '../lib/api';
 import { NetworkDeviceWizard } from '../components/NetworkDeviceWizard';
+import { NetworkInventoryPanel } from '../components/NetworkInventoryPanel';
 
 const TYPES = [
   ['router', 'Router'], ['switch', 'Switch'], ['firewall', 'Firewall'],
@@ -154,6 +155,7 @@ export function NetworkDevices(): JSX.Element {
           <div className="text-sm"><h3 className="font-semibold">Classification evidence</h3><p className="mt-1">Source: {device.classification.source} · Confidence: {device.classification.confidence}%</p><ul className="mt-2 list-disc space-y-1 pl-5">{device.classification.evidence.map((evidence) => <li key={evidence}>{evidence}</li>)}</ul></div>
           <p className="text-sm text-text-secondary">{device.capabilities.length ? `Verified capabilities: ${device.capabilities.join(', ')}` : 'No verified capabilities. Register with a connection test to verify read-only identity access.'}</p>
           {device.collection_state === 'authenticated' && <Alert variant="info" title="Connection verified">This device passed a one-time read-only identity test. Recurring inventory and telemetry collection are not enabled.</Alert>}
+          <NetworkInventoryPanel key={device.id} targetId={device.id} canRefresh={canConnect} supportsSNMP={device.management_modes?.includes('snmpv3') ?? false} />
           <Button variant="secondary" onClick={() => setParams({})}>Back to inventory</Button>
         </>}
       </DialogContent>

@@ -13,6 +13,7 @@ vi.mock('../hooks/useApiClient', () => ({ useApiClient: () => ({ listNetworkTarg
 vi.mock('../providers/AuthProvider', () => ({ useAuth: () => ({ profile: { roles: ['viewer'], permissions: mocks.permissions } }) }));
 vi.mock('../providers/TenantProvider', () => ({ useTenant: () => ({ currentTenantId: mocks.tenant, tenants: [{ id: 'tenant-a', name: 'Lagos' }, { id: 'tenant-b', name: 'Abuja' }] }) }));
 vi.mock('../providers/ToastProvider', () => ({ useToast: () => ({ showToast: mocks.toast }) }));
+vi.mock('../components/NetworkInventoryPanel', () => ({ NetworkInventoryPanel: () => <div>Inventory panel</div> }));
 
 const device = {
   id: 'switch-1', tenant_id: 'tenant-a', family: 'network_security', type: 'switch',
