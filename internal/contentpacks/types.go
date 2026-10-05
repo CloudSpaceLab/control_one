@@ -21,6 +21,7 @@ const (
 	CollectorNodeFileLog    = "node_filelog"
 	CollectorOTelFileLog    = "otel_filelog"
 	CollectorSyslog         = "syslog"
+	CollectorNetFlow        = "netflow"
 	CollectorWindowsEvent   = "windows_eventlog"
 	CollectorSplunkHEC      = "splunk_hec"
 	CollectorKafka          = "kafka"

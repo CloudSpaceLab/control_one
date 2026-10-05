@@ -42,6 +42,10 @@ func TestSNMPv3WithNetSNMP(t *testing.T) {
 	port, err := container.MappedPort(ctx, "161/udp")
 	require.NoError(t, err)
 	credential := Credential{Username: "fixture-readonly", AuthProtocol: "SHA256", AuthSecret: "fixture-auth-secret", PrivProtocol: "AES", PrivSecret: "fixture-priv-secret"}
+	pollState, metrics := PollSNMP(ctx, host, port.Int(), credential)
+	require.Equal(t, "ready", pollState)
+	require.Contains(t, metrics, "uptime_ticks")
+	require.Greater(t, metrics["interface_count"], float64(0))
 	result := probeSNMP(ctx, host, port.Int(), credential)
 	require.Equal(t, "authenticated", result.State)
 	require.Equal(t, "Cisco", result.Vendor)
@@ -65,6 +69,8 @@ func TestSNMPv3WithNetSNMP(t *testing.T) {
 		require.Equal(t, inventory.Interfaces[index].ID, again.Interfaces[index].ID)
 	}
 	credential.Username = "fixture-unknown-user"
+	pollState, _ = PollSNMP(ctx, host, port.Int(), credential)
+	require.Equal(t, "auth_failed", pollState)
 	result = probeSNMP(ctx, host, port.Int(), credential)
 	require.Equal(t, "auth_failed", result.State)
 }

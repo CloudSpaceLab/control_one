@@ -2823,6 +2823,14 @@ export class APIClient {
     return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`);
   }
 
+  async getNetworkTelemetry(id: string): Promise<NetworkTelemetry> {
+    return this.request(`/api/v1/network-telemetry/${encodeURIComponent(id)}`);
+  }
+
+  async configureNetworkSource(id: string, payload: NetworkSourceConfig): Promise<void> {
+    await this.request(`/api/v1/network-telemetry/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
+  }
+
   async refreshNetworkInventory(id: string): Promise<NetworkInventoryStatus> {
     return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`, { method: 'POST', body: '{}' });
   }
@@ -7620,6 +7628,7 @@ export interface ContentPackOTelConfigRenderRequest {
   memory_spike_limit_mib?: number;
   batch_timeout?: string;
   batch_send_batch_size?: number;
+  network_logs_endpoint?: string;
   disable_persistent_storage?: boolean;
   storage_extension_id?: string;
   storage_directory?: string;
@@ -7674,6 +7683,34 @@ export interface ContentPackOTelConfigCandidateDetail extends ContentPackOTelCon
   sources: ContentPackOTelCollectorSourcePlan[];
   warnings?: string[];
   yaml: string;
+}
+
+export interface NetworkSourceConfig {
+  source_type: 'snmp_poll' | 'snmp_trap' | 'syslog' | 'netflow' | 'ipfix' | 'sflow' | 'ssh_config' | 'netconf' | 'restconf' | 'vendor_api';
+  collector_id: string;
+  site: string;
+  sender_address: string;
+  stale_after_seconds: number;
+}
+
+export interface NetworkSource extends NetworkSourceConfig {
+  id: string;
+  tenant_id: string;
+  target_id: string;
+  state: string;
+  observed_at?: string;
+  last_contact_at?: string;
+  queue_depth: number;
+  lag_millis: number;
+  collector_status: string;
+  collector_heartbeat_at?: string;
+}
+
+export interface NetworkTelemetry {
+  target_id: string;
+  sources: NetworkSource[];
+  source_types: string[];
+  generated_at: string;
 }
 
 export interface ContentPackEdgeCollector {

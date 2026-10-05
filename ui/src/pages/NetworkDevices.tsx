@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import type { NetworkTarget } from '../lib/api';
 import { NetworkDeviceWizard } from '../components/NetworkDeviceWizard';
 import { NetworkInventoryPanel } from '../components/NetworkInventoryPanel';
+import { NetworkTelemetryPanel } from '../components/NetworkTelemetryPanel';
 
 const TYPES = [
   ['router', 'Router'], ['switch', 'Switch'], ['firewall', 'Firewall'],
@@ -156,6 +157,7 @@ export function NetworkDevices(): JSX.Element {
           <p className="text-sm text-text-secondary">{device.capabilities.length ? `Verified capabilities: ${device.capabilities.join(', ')}` : 'No verified capabilities. Register with a connection test to verify read-only identity access.'}</p>
           {device.collection_state === 'authenticated' && <Alert variant="info" title="Connection verified">This device passed a one-time read-only identity test. Recurring inventory and telemetry collection are not enabled.</Alert>}
           <NetworkInventoryPanel key={device.id} targetId={device.id} canRefresh={canConnect} supportsSNMP={device.management_modes?.includes('snmpv3') ?? false} />
+          <NetworkTelemetryPanel key={`telemetry-${device.id}`} targetId={device.id} tenantId={device.tenant_id} site={device.site} canConfigure={canWrite} />
           <Button variant="secondary" onClick={() => setParams({})}>Back to inventory</Button>
         </>}
       </DialogContent>

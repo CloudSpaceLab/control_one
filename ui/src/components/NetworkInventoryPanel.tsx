@@ -38,7 +38,7 @@ export function NetworkInventoryPanel({ targetId, canRefresh, supportsSNMP }: { 
     {inventory.error && <Alert variant="critical">Unable to load inventory.</Alert>}
     {snapshot && inventory.data?.state !== 'inventory_ready' && <Alert variant="warning" title="Previous snapshot">{inventory.data?.state === 'refreshing' ? 'Inventory refresh is in progress. ' : 'The latest refresh did not produce a new inventory. '}The facts below retain their previous observation times.</Alert>}
     {snapshot ? <>
-      <p>Snapshot observed: {time(snapshot.observed_at)} · Adapter: {snapshot.adapter}. Collection is manual; recurring polling and telemetry are not enabled.</p>
+      <p>Snapshot observed: {time(snapshot.observed_at)} · Adapter: {snapshot.adapter}. Inventory refresh is manual. Recurring collection readiness is shown under Network telemetry sources.</p>
       <Facts facts={snapshot.facts} />
       <Records title="Interfaces" records={snapshot.interfaces} />
       <Records title="LLDP / CDP neighbors" records={snapshot.neighbors} />

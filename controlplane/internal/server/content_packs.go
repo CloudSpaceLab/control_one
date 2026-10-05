@@ -282,6 +282,7 @@ type contentPackSourceProposalRejectRequest struct {
 
 type contentPackOTelConfigRenderRequest struct {
 	Endpoint                    string                                 `json:"endpoint"`
+	NetworkLogsEndpoint         string                                 `json:"network_logs_endpoint,omitempty"`
 	CollectorID                 string                                 `json:"collector_id,omitempty"`
 	SourceIDs                   []string                               `json:"source_ids,omitempty"`
 	SourceProposalIDs           []string                               `json:"source_proposal_ids,omitempty"`
@@ -547,6 +548,22 @@ func (s *Server) handleContentPackOTelConfigCandidateSubroute(w http.ResponseWri
 func (s *Server) handleContentPackEdgeCollectorSubroute(w http.ResponseWriter, r *http.Request, path string) {
 	rest := strings.TrimPrefix(path, "/api/v1/content-packs/collectors/")
 	parts := strings.Split(rest, "/")
+	if len(parts) == 2 && parts[1] == "network-bindings" {
+		s.handleCollectorNetworkBindings(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "network-otlp" {
+		s.handleNetworkOTLP(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "network-reports" {
+		s.handleNetworkSourceReports(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "network-events" {
+		s.handleNetworkSyslogEvents(w, r, parts[0])
+		return
+	}
 	if len(parts) == 2 && parts[1] == "heartbeat" {
 		s.handleContentPackEdgeCollectorHeartbeat(w, r, parts[0])
 		return
@@ -1447,6 +1464,7 @@ func (s *Server) handleContentPackOTelConfig(w http.ResponseWriter, r *http.Requ
 	}
 	plan, err := contentpacks.BuildOTelCollectorConfig(renderSources, contentpacks.OTelCollectorConfigOptions{
 		Endpoint:                    req.Endpoint,
+		NetworkLogsEndpoint:         req.NetworkLogsEndpoint,
 		TenantID:                    tenantID.String(),
 		CollectorID:                 req.CollectorID,
 		Headers:                     req.Headers,
@@ -2148,6 +2166,7 @@ func (s *Server) renderContentPackOTelConfig(w http.ResponseWriter, r *http.Requ
 	plan, err := contentpacks.BuildOTelCollectorConfig(renderSources, contentpacks.OTelCollectorConfigOptions{
 		Endpoint:                    req.Endpoint,
 		TenantID:                    tenantID.String(),
+		NetworkLogsEndpoint:         req.NetworkLogsEndpoint,
 		CollectorID:                 req.CollectorID,
 		Headers:                     req.Headers,
 		InsecureTLS:                 req.InsecureTLS,

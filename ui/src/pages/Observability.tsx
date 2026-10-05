@@ -42,6 +42,7 @@ import type {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useTenant } from '@/providers/TenantProvider';
+import { NetworkObservabilityPanel } from '@/components/NetworkTelemetryPanel';
 
 type ObservabilityState =
   | 'healthy'
@@ -479,6 +480,7 @@ export function Observability(): JSX.Element {
         <KpiTile label="Needs access" value={summary.needsAccess.toString()} tone="degraded" icon={<KeyRound />} />
         <KpiTile label="Unsupported" value={summary.unsupported.toString()} tone="critical" icon={<Terminal />} />
       </div>
+      <NetworkObservabilityPanel key={tenantId ?? 'all'} tenantId={tenantId} />
 
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
         <Panel padding="md" eyebrow="STACK MAP" title={referenceMode ? 'Reference blueprint' : `${tenantLabel} live stack`}>

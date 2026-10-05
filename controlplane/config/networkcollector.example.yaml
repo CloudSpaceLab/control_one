@@ -1,0 +1,52 @@
+# Platform administrator configuration for a dedicated site collector registered
+# through the existing collector-token workflow. No network-device agent is used.
+control_plane_url: https://controlone.example
+tenant_id: 00000000-0000-0000-0000-000000000001
+collector_id: branch-snmp-poller
+token_env: CONTROL_ONE_COLLECTOR_TOKEN
+interval_seconds: 30
+allowed_cidrs:
+  - 192.168.20.0/24
+# Optional receiver for SNMP traps. Restrict this UDP socket at the host/network
+# firewall too. Each sender needs an snmp_trap binding with its exact source IP.
+# trap_listen_address: 0.0.0.0:1162
+targets:
+  - target_id: 00000000-0000-0000-0000-000000000002
+    address: 192.168.20.10
+    port: 161
+    username: readonly-snmp
+    auth_protocol: SHA256
+    auth_secret_env: SWITCH_SNMP_AUTH_SECRET
+    priv_secret_env: SWITCH_SNMP_PRIV_SECRET
+    # Trap-only targets may omit SNMP polling credentials and use SNMPv2c
+    # community authentication for traps. Prefer SNMPv3 authPriv when available.
+    trap_community_env: SWITCH_TRAP_COMMUNITY
+    # Optional read-only management snapshots; provide only the adapters in use.
+    # Values stay on this site host; secrets are environment-variable names.
+    # sources:
+    #   ssh_config:
+    #     adapter: cisco
+    #     port: 22
+    #     username: readonly-automation
+    #     password_env: SWITCH_SSH_PASSWORD
+    #     host_key_fingerprint: SHA256:replace-with-pinned-key-fingerprint
+    #   netconf:
+    #     port: 830
+    #     username: readonly-automation
+    #     private_key_env: SWITCH_NETCONF_PRIVATE_KEY
+    #     passphrase_env: SWITCH_NETCONF_KEY_PASSPHRASE
+    #     host_key_fingerprint: SHA256:replace-with-pinned-key-fingerprint
+    #   restconf:
+    #     port: 443
+    #     path: /restconf/data/ietf-interfaces:interfaces
+    #     token_env: SWITCH_RESTCONF_TOKEN
+    #     ca_file: /etc/control-one/management-ca.pem
+    #   vendor_api:
+    #     port: 443
+    #     path: /api/v1/interfaces
+    #     token_env: SWITCH_VENDOR_API_TOKEN
+    #     ca_file: /etc/control-one/management-ca.pem
+
+# NetFlow v5/v9, IPFIX, sFlow and Syslog receivers are configured through the
+# approved OTel content-pack collector recipe. Their exact observed UDP sender
+# IP must be bound to the matching network device and source type in Control One.

@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NetworkDevices } from './NetworkDevices';
+vi.mock('../components/NetworkTelemetryPanel', () => ({ NetworkTelemetryPanel: () => null }));
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(), create: vi.fn(), get: vi.fn(), toast: vi.fn(),

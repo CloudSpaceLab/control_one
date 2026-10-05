@@ -22,7 +22,7 @@ describe('Network inventory detail', () => {
     expect(screen.getByText(/snmpv3 · sysName/)).toBeInTheDocument();
     await user.click(screen.getByText('Interfaces (1)'));
     expect(screen.getByText('port7')).toBeInTheDocument();
-    expect(screen.getByText(/recurring polling and telemetry are not enabled/)).toBeInTheDocument();
+    expect(screen.getByText(/Recurring collection readiness is shown under Network telemetry sources/)).toBeInTheDocument();
   });
   it('preserves old facts after failed refresh and does not claim a new observation', async () => {
     mocks.get.mockResolvedValue({ target_id: 'device-1', state: 'inventory_ready', snapshot });
