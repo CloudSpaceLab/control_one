@@ -68,6 +68,7 @@ const PRIMARY_DESTINATIONS = [
   'Search & lifecycle',
   'Ask AI',
   'Servers',
+  'Network devices',
   'Network & exposure',
   'Observability',
   'SIEM coverage',
