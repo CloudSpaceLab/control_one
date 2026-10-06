@@ -7,6 +7,7 @@ import {
   Rocket,
   Server,
   Settings,
+  ShieldCheck,
   User as UserIcon,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -71,6 +72,12 @@ export function ProfileMenu() {
               <Link to="/secrets">
                 <KeyRound className="h-4 w-4" />
                 Secrets
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/roles">
+                <ShieldCheck className="h-4 w-4" />
+                Roles &amp; permissions
               </Link>
             </DropdownMenuItem>
           </>

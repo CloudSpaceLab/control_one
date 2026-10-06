@@ -30,6 +30,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/ipintel"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/llm"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/mfa"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/networkdevice"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/secretbox"
@@ -627,6 +628,49 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, allowedRoles 
 	return nil, false
 }
 
+// authorizePermission checks the effective permission set for local users.
+// Static principals used by integrations and legacy tests retain the role
+// fallback until they are backed by a persisted local user.
+func (s *Server) authorizePermission(w http.ResponseWriter, r *http.Request, permission string, fallbackRoles ...string) (*auth.Principal, bool) {
+	principal, ok := auth.PrincipalFromContext(r.Context())
+	if !ok {
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return nil, false
+	}
+	for _, role := range principal.Roles {
+		if strings.EqualFold(strings.TrimSpace(role), roleAdmin) {
+			return principal, true
+		}
+	}
+
+	if principal.Type == "user" {
+		userID := principalStorageUserID(s, r.Context(), principal)
+		if userID != uuid.Nil {
+			permissions, err := s.store.GetUserPermissions(r.Context(), userID)
+			if err != nil {
+				s.logger.Error("get effective user permissions", zap.Error(err), zap.String("permission", permission))
+				http.Error(w, http.StatusText(http.StatusServiceUnavailable), http.StatusServiceUnavailable)
+				return nil, false
+			}
+			// Stores used by legacy/static test configurations may not expose
+			// persisted permission data. Preserve their role-based behavior;
+			// the real store returns an allocated (possibly empty) slice.
+			if permissions == nil {
+				return s.authorize(w, r, fallbackRoles...)
+			}
+			for _, granted := range permissions {
+				if strings.EqualFold(strings.TrimSpace(granted), strings.TrimSpace(permission)) {
+					return principal, true
+				}
+			}
+			http.Error(w, http.StatusText(http.StatusForbidden), http.StatusForbidden)
+			return nil, false
+		}
+	}
+
+	return s.authorize(w, r, fallbackRoles...)
+}
+
 func isReadCapableRole(role string) bool {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case roleViewer, roleOperator, roleInvestigator, roleCISO:
@@ -908,7 +952,9 @@ type Server struct {
 	auditAsync bool
 	// sealer encrypts provider credentials at rest. nil means secrets
 	// encryption is not configured — mutating endpoints must refuse to write.
-	sealer *secretbox.Sealer
+	sealer           *secretbox.Sealer
+	networkProbe     func(context.Context, string, int, string, networkdevice.Credential) networkdevice.Result
+	networkInventory func(context.Context, string, int, string, networkdevice.Credential) networkdevice.Inventory
 	// smtpSend is replaceable in tests. Production uses sendSMTPMessage.
 	smtpSend func(context.Context, storage.SMTPSettings, string, []string) error
 	// Alert email hooks keep delivery deterministic in tests. Production sends
@@ -1127,6 +1173,12 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/dashboards/", s.handleDashboardSubroutes)
 	s.baseRouter.HandleFunc("/api/v1/nodes", s.handleNodesCollection)
 	s.baseRouter.HandleFunc("/api/v1/nodes/", s.handleNodeResource)
+	s.baseRouter.HandleFunc("/api/v1/targets", s.handleTargetsCollection)
+	s.baseRouter.HandleFunc("/api/v1/targets/", s.handleTargetResource)
+	s.baseRouter.HandleFunc("/api/v1/network-onboarding/", s.handleNetworkOnboarding)
+	s.baseRouter.HandleFunc("/api/v1/network-inventory/", s.handleNetworkInventory)
+	s.baseRouter.HandleFunc("/api/v1/network-configuration/", s.handleNetworkConfiguration)
+	s.baseRouter.HandleFunc("/api/v1/network-telemetry/", s.handleNetworkTelemetry)
 	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
 	s.baseRouter.HandleFunc("/api/v1/node-services", s.handleTenantNodeServices)
 	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)
@@ -1417,17 +1469,43 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		user, err := s.store.GetUserByExternalID(r.Context(), principal.Subject)
 		if err != nil {
 			s.logger.Warn("lookup profile user", zap.Error(err))
-		} else if user != nil {
+		}
+		var userID uuid.UUID
+		if user != nil {
+			userID = user.ID
 			resp.User = &profileUserDetails{
 				ID:          user.ID.String(),
 				DisplayName: nullStringPtr(user.DisplayName),
 				Email:       nullStringPtr(user.Email),
 				CreatedAt:   user.CreatedAt.UTC().Format(time.RFC3339),
 			}
-			if roles, err := s.store.ListUserRoles(r.Context(), user.ID); err != nil {
+		} else if strings.TrimSpace(principal.Email) != "" {
+			// Password-authenticated local users use their email as the stable
+			// lookup key while the auth principal subject is their UUID.
+			local, localErr := s.store.GetLocalUserByEmail(r.Context(), principal.Email)
+			if localErr != nil {
+				s.logger.Warn("lookup local profile user", zap.Error(localErr))
+			} else if local != nil {
+				userID = local.ID
+				displayName, email := local.DisplayName, local.Email
+				resp.User = &profileUserDetails{
+					ID:          local.ID.String(),
+					DisplayName: &displayName,
+					Email:       &email,
+					CreatedAt:   local.CreatedAt.UTC().Format(time.RFC3339),
+				}
+			}
+		}
+		if userID != uuid.Nil {
+			if roles, err := s.store.ListUserRoles(r.Context(), userID); err != nil {
 				s.logger.Warn("list profile roles", zap.Error(err))
 			} else if len(roles) > 0 {
 				resp.StoredRoles = append([]string{}, roles...)
+			}
+			if permissions, err := s.store.GetUserPermissions(r.Context(), userID); err != nil {
+				s.logger.Warn("get profile permissions", zap.Error(err))
+			} else if permissions != nil {
+				resp.Permissions = append([]string{}, permissions...)
 			}
 		}
 	}
@@ -1640,6 +1718,7 @@ type profileResponse struct {
 	Type        string              `json:"type"`
 	Roles       []string            `json:"roles"`
 	Groups      []string            `json:"groups"`
+	Permissions []string            `json:"permissions,omitempty"`
 	StoredRoles []string            `json:"stored_roles,omitempty"`
 	User        *profileUserDetails `json:"user,omitempty"`
 }
@@ -2675,6 +2754,7 @@ type networkObservationResponse struct {
 
 type nodeResponse struct {
 	ID                  string                        `json:"id"`
+	TargetID            string                        `json:"target_id"`
 	TenantID            string                        `json:"tenant_id"`
 	Hostname            string                        `json:"hostname"`
 	OS                  *string                       `json:"os,omitempty"`
@@ -2702,6 +2782,7 @@ func nodeResponseFromModel(n storage.Node) nodeResponse {
 
 	resp := nodeResponse{
 		ID:               n.ID.String(),
+		TargetID:         n.ID.String(),
 		TenantID:         n.TenantID.String(),
 		Hostname:         n.Hostname,
 		OS:               nullStringPtr(n.OS),

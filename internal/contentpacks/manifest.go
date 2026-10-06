@@ -510,6 +510,7 @@ func allowedCollectorModes() map[string]struct{} {
 		CollectorNodeFileLog,
 		CollectorOTelFileLog,
 		CollectorSyslog,
+		CollectorNetFlow,
 		CollectorWindowsEvent,
 		CollectorSplunkHEC,
 		CollectorKafka,

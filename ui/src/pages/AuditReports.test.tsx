@@ -121,7 +121,7 @@ describe('AuditReports production hardening', () => {
     render(<AuditReports />);
 
     expect(await screen.findByText('All tenants · generated compliance reports.')).toBeInTheDocument();
-    expectKpi('Reports', '5');
+    await waitFor(() => expectKpi('Reports', '5'));
     expectKpi('Tenants with reports', '2');
     expect(screen.queryByRole('button', { name: /generate report/i })).not.toBeInTheDocument();
     expect(mocks.createAuditReport).not.toHaveBeenCalled();

@@ -255,13 +255,22 @@ func validateNormalizedSecurityEvent(ev *IngestedEvent) error {
 		"ssh.authentication_failure":      {"src_ip", "dst_port", "protocol", "user_name", "auth_result"},
 		"windows.authentication_failure":  {"user_name", "auth_result"},
 		"database.authentication_failure": {"user_name", "auth_result"},
-		"web.request":                     {"src_ip", "dst_port", "protocol", "http_method", "path", "status_code"},
+		"web.request":                     {"src_ip", "protocol", "http_method", "path", "status_code"},
 		"network.connection":              {"src_ip", "dst_ip", "dst_port", "protocol"},
 	}
 	for _, field := range required[eventType] {
 		value, ok := details[field]
 		if !ok || strings.TrimSpace(fmt.Sprint(value)) == "" || fmt.Sprint(value) == "0" {
 			return fmt.Errorf("%s requires %s", eventType, field)
+		}
+	}
+	if eventType == "web.request" {
+		if value, ok := details["dst_port"]; ok {
+			raw := strings.TrimSpace(fmt.Sprint(value))
+			port, err := strconv.Atoi(raw)
+			if err != nil || port < 1 || port > 65535 {
+				return errors.New("web.request dst_port must be a valid port when provided")
+			}
 		}
 	}
 	for _, field := range []string{"src_ip", "dst_ip"} {

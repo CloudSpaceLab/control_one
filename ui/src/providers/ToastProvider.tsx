@@ -25,7 +25,7 @@ export function ToastProvider({ children }: { children: ReactNode }): JSX.Elemen
 
   const showToast = useCallback(
     (message: string, variant: ToastVariant = 'info') => {
-      const id = crypto.randomUUID();
+      const id = crypto.randomUUID?.() ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
       setToasts((prev) => [...prev, { id, message, variant }]);
       setTimeout(() => dismissToast(id), 5000);
     },

@@ -6,6 +6,161 @@ const HTTP_STATUS_UNAUTHORIZED = 401;
 
 export type HypervisorProvider = "aws" | "azure" | "vmware" | "libvirt";
 
+export interface NetworkTarget {
+	management_modes: string[];
+  id: string;
+  tenant_id: string;
+  node_id?: string;
+  family: string;
+  type: string;
+  subtype: string;
+  hostname: string;
+  display_name: string;
+  site: string;
+  group: string;
+  vendor: string;
+  model: string;
+  platform: string;
+  firmware: string;
+  serial: string;
+  lifecycle_state: string;
+  reachability_state: string;
+  collection_state: string;
+  capabilities: string[];
+  classification: TargetClassificationResponse;
+  addresses: { address: string; purpose: string; source: string; confidence: number; current: boolean }[];
+  last_observed_at?: string;
+  last_successful_collection_at?: string;
+}
+
+export interface CreateNetworkTargetPayload {
+  tenant_id: string;
+  type: string;
+  display_name: string;
+  hostname?: string;
+  site?: string;
+  group?: string;
+  management_addresses: string[];
+}
+
+export interface NetworkInventoryFact {
+  value: unknown;
+  protocol: string;
+  source: string;
+  observed_at: string;
+}
+export interface NetworkInventoryRecord {
+  id: string;
+  facts: Record<string, NetworkInventoryFact>;
+}
+export interface NetworkInventorySnapshot {
+  state: string;
+  adapter: string;
+  observed_at: string;
+  facts: Record<string, NetworkInventoryFact>;
+  interfaces: NetworkInventoryRecord[];
+  neighbors: NetworkInventoryRecord[];
+  entities: NetworkInventoryRecord[];
+  addresses: NetworkInventoryRecord[];
+  vlans: NetworkInventoryRecord[];
+  arp: NetworkInventoryRecord[];
+  routes: NetworkInventoryRecord[];
+  resources: NetworkInventoryRecord[];
+  unavailable: string[];
+  raw_evidence: NetworkInventoryRecord[];
+}
+export interface NetworkInventoryStatus {
+  target_id: string;
+  state: string;
+  attempted_at?: string;
+  completed_at?: string;
+  snapshot?: NetworkInventorySnapshot;
+}
+export interface NetworkConfigurationFinding {
+  id: string;
+  status: 'finding' | 'not_observed' | 'unsupported';
+  severity?: string;
+  title: string;
+  evidence?: string[];
+  snapshot_id?: string;
+  evidence_ref?: string;
+  related_evidence_ref?: string;
+}
+export interface NetworkConfigurationSnapshot {
+  id: string;
+  tenant_id: string;
+  target_id: string;
+  source_id: string;
+  source_type: string;
+  adapter: string;
+  adapter_version: string;
+  format: string;
+  content: string;
+  content_hash: string;
+  revision: number;
+  observed_at: string;
+  created_at: string;
+  added: string[];
+  removed: string[];
+  findings: NetworkConfigurationFinding[];
+}
+export interface NetworkConfigurationHistory {
+  target_id: string;
+  state: 'ready' | 'not_collected';
+  snapshots: NetworkConfigurationSnapshot[];
+}
+
+export interface NetworkCredentialConfig {
+  username: string;
+  password?: string;
+  private_key?: string;
+  passphrase?: string;
+  host_key_fingerprint?: string;
+  auth_protocol?: string;
+  auth_secret?: string;
+  priv_protocol?: string;
+  priv_secret?: string;
+}
+
+export interface NetworkConnectionReceipt {
+  id: string;
+  tenant_id: string;
+  credential_id: string;
+  protocol: 'snmpv3' | 'ssh';
+  address: string;
+  port: number;
+  state: 'testing' | 'authenticated' | 'auth_failed' | 'unreachable' | 'unsupported' | 'policy_blocked';
+  completed_at?: string;
+  result: {
+    state: string;
+    message: string;
+    vendor: string;
+    model: string;
+    platform: string;
+    suggested_type: string;
+    confidence: number;
+    evidence: string[];
+    capabilities: string[];
+    required_privileges: string;
+  };
+}
+
+export interface ListNetworkTargetsParams {
+  tenantId?: string;
+  search?: string;
+  type?: string;
+  site?: string;
+  group?: string;
+  vendor?: string;
+  model?: string;
+  platform?: string;
+  firmware?: string;
+  reachabilityState?: string;
+  collectionState?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ProviderCredential {
   id: string;
   tenant_id: string;
@@ -1393,6 +1548,7 @@ export interface NodeIPGeo {
 
 export interface NodeSummary {
   id: string;
+  target_id?: string;
   tenant_id: string;
   hostname: string;
   os?: string;
@@ -1516,6 +1672,7 @@ export interface Profile {
   type: string;
   roles: string[];
   groups: string[];
+  permissions?: string[];
   stored_roles?: string[];
   user?: ProfileUserDetails;
 }
@@ -2688,6 +2845,64 @@ export class APIClient {
       data: response.data,
       pagination: normalizePagination(response.pagination),
     };
+  }
+
+  async listNetworkTargets(options: ListNetworkTargetsParams = {}): Promise<PaginatedResponse<NetworkTarget>> {
+    const search = new URLSearchParams({ family: 'network_security' });
+    if (options.tenantId) search.set('tenant_id', options.tenantId);
+    const filters: Array<[keyof ListNetworkTargetsParams, string]> = [
+      ['search', 'search'], ['type', 'type'], ['site', 'site'], ['group', 'group'],
+      ['vendor', 'vendor'], ['model', 'model'], ['platform', 'platform'], ['firmware', 'firmware'],
+      ['reachabilityState', 'reachability_state'], ['collectionState', 'collection_state'],
+    ];
+    for (const [option, parameter] of filters) {
+      const value = options[option];
+      if (typeof value === 'string' && value.trim()) search.set(parameter, value.trim());
+    }
+    search.set('limit', String(options.limit ?? 20));
+    search.set('offset', String(options.offset ?? 0));
+    const response = await this.request<RawPaginatedResponse<NetworkTarget>>(`/api/v1/targets?${search}`);
+    return { data: response.data, pagination: normalizePagination(response.pagination) };
+  }
+
+  async createNetworkTarget(payload: CreateNetworkTargetPayload): Promise<NetworkTarget> {
+    return this.request<NetworkTarget>('/api/v1/targets', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async createNetworkCredential(payload: { tenant_id: string; name: string; protocol: 'snmpv3' | 'ssh'; config: NetworkCredentialConfig }): Promise<{ id: string }> {
+    return this.request('/api/v1/network-onboarding/credentials', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async testNetworkConnection(payload: { tenant_id: string; credential_id: string; address: string; port: number }): Promise<NetworkConnectionReceipt> {
+    return this.request('/api/v1/network-onboarding/tests', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async saveNetworkOnboarding(payload: { test_id: string; display_name: string; type: string; site: string; group: string; telemetry_sources: string[] }): Promise<NetworkTarget> {
+    return this.request('/api/v1/network-onboarding/save', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async getNetworkTarget(id: string): Promise<NetworkTarget> {
+    return this.request<NetworkTarget>(`/api/v1/targets/${encodeURIComponent(id)}`);
+  }
+
+  async getNetworkInventory(id: string): Promise<NetworkInventoryStatus> {
+    return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`);
+  }
+
+  async getNetworkTelemetry(id: string): Promise<NetworkTelemetry> {
+    return this.request(`/api/v1/network-telemetry/${encodeURIComponent(id)}`);
+  }
+
+  async configureNetworkSource(id: string, payload: NetworkSourceConfig): Promise<void> {
+    await this.request(`/api/v1/network-telemetry/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
+  }
+
+  async refreshNetworkInventory(id: string): Promise<NetworkInventoryStatus> {
+    return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`, { method: 'POST', body: '{}' });
+  }
+
+  async getNetworkConfiguration(id: string): Promise<NetworkConfigurationHistory> {
+    return this.request(`/api/v1/network-configuration/${encodeURIComponent(id)}`);
   }
 
   async listNodes(
@@ -7545,6 +7760,7 @@ export interface ContentPackOTelConfigRenderRequest {
   memory_spike_limit_mib?: number;
   batch_timeout?: string;
   batch_send_batch_size?: number;
+  network_logs_endpoint?: string;
   disable_persistent_storage?: boolean;
   storage_extension_id?: string;
   storage_directory?: string;
@@ -7599,6 +7815,34 @@ export interface ContentPackOTelConfigCandidateDetail extends ContentPackOTelCon
   sources: ContentPackOTelCollectorSourcePlan[];
   warnings?: string[];
   yaml: string;
+}
+
+export interface NetworkSourceConfig {
+  source_type: 'snmp_poll' | 'snmp_trap' | 'syslog' | 'netflow' | 'ipfix' | 'sflow' | 'ssh_config' | 'netconf' | 'restconf' | 'vendor_api';
+  collector_id: string;
+  site: string;
+  sender_address: string;
+  stale_after_seconds: number;
+}
+
+export interface NetworkSource extends NetworkSourceConfig {
+  id: string;
+  tenant_id: string;
+  target_id: string;
+  state: string;
+  observed_at?: string;
+  last_contact_at?: string;
+  queue_depth: number;
+  lag_millis: number;
+  collector_status: string;
+  collector_heartbeat_at?: string;
+}
+
+export interface NetworkTelemetry {
+  target_id: string;
+  sources: NetworkSource[];
+  source_types: string[];
+  generated_at: string;
 }
 
 export interface ContentPackEdgeCollector {

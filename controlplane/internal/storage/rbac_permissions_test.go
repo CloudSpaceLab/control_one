@@ -30,7 +30,7 @@ func TestIsBuiltInRoleName(t *testing.T) {
 	}
 }
 
-func TestSetRolePermissionsRejectsBuiltInRoleName(t *testing.T) {
+func TestSetRolePermissionsAllowsBuiltInRoleName(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", "file:rbac-permissions-test?mode=memory&cache=shared")
 	require.NoError(t, err)
@@ -59,12 +59,12 @@ CREATE TABLE role_permissions (
 	require.NoError(t, err)
 
 	store := &Store{db: db}
-	require.ErrorIs(t, store.SetRolePermissions(ctx, adminID, []string{"roles.read"}), ErrBuiltInRoleImmutable)
+	require.NoError(t, store.SetRolePermissions(ctx, adminID, []string{"roles.read"}))
 	require.NoError(t, store.SetRolePermissions(ctx, customID, []string{"roles.read"}))
 
 	var adminPermissionCount int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM role_permissions WHERE role_id = $1`, adminID.String()).Scan(&adminPermissionCount))
-	require.Zero(t, adminPermissionCount)
+	require.Equal(t, 1, adminPermissionCount)
 
 	var customPermissionCount int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM role_permissions WHERE role_id = $1`, customID.String()).Scan(&customPermissionCount))

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Observability } from './Observability';
+vi.mock('@/components/NetworkTelemetryPanel', () => ({ NetworkObservabilityPanel: () => null }));
 
 const mocks = vi.hoisted(() => {
   const listWebserverInstances = vi.fn();

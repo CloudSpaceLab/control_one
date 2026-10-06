@@ -31,6 +31,7 @@ var otelReceiverTypePattern = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 type OTelCollectorConfigOptions struct {
 	Endpoint                    string
+	NetworkLogsEndpoint         string
 	TenantID                    string
 	CollectorID                 string
 	Headers                     map[string]string
@@ -149,6 +150,15 @@ func BuildOTelCollectorConfig(sources []OTelCollectorConfigSource, opts OTelColl
 	plan.Config.Processors[defaultOTelBatchProcessor] = otelBatchConfig(opts)
 	commonResourceProcessorID := addCommonOTelResourceProcessor(plan.Config.Processors, opts)
 	storageExtensionID := ensureOTelPersistentStorage(&plan.Config, opts)
+	if opts.NetworkLogsEndpoint != "" {
+		plan.Config.Processors["batch/controlone.network"] = map[string]any{"timeout": "1s", "send_batch_size": 100, "send_batch_max_size": 100}
+		networkOpts := opts
+		networkOpts.Compression = "none"
+		exporter := otelExporterConfig(networkOpts)
+		delete(exporter, "endpoint")
+		exporter["logs_endpoint"] = opts.NetworkLogsEndpoint
+		plan.Config.Exporters["otlphttp/controlone.network"] = exporter
+	}
 
 	ordered := append([]OTelCollectorConfigSource(nil), sources...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -228,10 +238,15 @@ func BuildOTelCollectorConfig(sources []OTelCollectorConfigSource, opts OTelColl
 			processors = append(processors, redactionProcessorID)
 		}
 		processors = append(processors, defaultOTelBatchProcessor)
+		exporterID := defaultOTelExporterID
+		if opts.NetworkLogsEndpoint != "" && (recipe.Mode == CollectorSyslog || recipe.Mode == CollectorNetFlow) {
+			exporterID = "otlphttp/controlone.network"
+			processors[len(processors)-1] = "batch/controlone.network"
+		}
 		plan.Config.Service.Pipelines[pipelineID] = OTelPipelineConfig{
 			Receivers:  receiverIDs,
 			Processors: processors,
-			Exporters:  []string{defaultOTelExporterID},
+			Exporters:  []string{exporterID},
 		}
 		plan.Sources = append(plan.Sources, OTelCollectorSourcePlan{
 			SourceID:            sourceID,
@@ -340,6 +355,8 @@ func buildOTelReceivers(source ResolvedSource, recipe CollectorRecipe, storageEx
 		return buildOTelFileLogReceiver(source, recipe, storageExtensionID)
 	case CollectorSyslog:
 		return buildOTelSyslogReceiver(source, recipe)
+	case CollectorNetFlow:
+		return buildOTelFlowReceiver(source, recipe)
 	case CollectorWindowsEvent:
 		return buildOTelWindowsEventReceivers(source, recipe, storageExtensionID)
 	case CollectorWEF:
@@ -1262,7 +1279,7 @@ func sourceHasCollectorMode(source SourceProfile, mode string) bool {
 
 func isOTelRenderableMode(mode string) bool {
 	switch strings.TrimSpace(mode) {
-	case CollectorOTelFileLog, CollectorSyslog, CollectorWindowsEvent, CollectorWEF, CollectorSplunkHEC, CollectorKafka, CollectorOTLP, CollectorPrometheus:
+	case CollectorOTelFileLog, CollectorSyslog, CollectorNetFlow, CollectorWindowsEvent, CollectorWEF, CollectorSplunkHEC, CollectorKafka, CollectorOTLP, CollectorPrometheus:
 		return true
 	default:
 		return false
@@ -1275,6 +1292,8 @@ func defaultOTelReceiverForMode(mode string) string {
 		return "filelog"
 	case CollectorSyslog:
 		return "syslog"
+	case CollectorNetFlow:
+		return "netflow"
 	case CollectorWindowsEvent:
 		return "windows_event_log"
 	case CollectorWEF:

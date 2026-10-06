@@ -39,6 +39,7 @@ const Alerts = lazy(() => import('./pages/Alerts').then((m) => ({ default: m.Ale
 const Access = lazy(() => import('./pages/Access').then((m) => ({ default: m.Access })));
 const Sessions = lazy(() => import('./pages/Sessions').then((m) => ({ default: m.Sessions })));
 const NetworkSecurity = lazy(() => import('./pages/NetworkSecurity').then((m) => ({ default: m.NetworkSecurity })));
+const NetworkDevices = lazy(() => import('./pages/NetworkDevices').then((m) => ({ default: m.NetworkDevices })));
 const SIEMCoverage = lazy(() => import('./pages/SIEMCoverage').then((m) => ({ default: m.SIEMCoverage })));
 const WebserverAutoControl = lazy(() => import('./pages/WebserverAutoControl').then((m) => ({ default: m.WebserverAutoControl })));
 const PatchManagement = lazy(() => import('./pages/PatchManagement').then((m) => ({ default: m.PatchManagement })));
@@ -185,6 +186,19 @@ function loginReturnState(location: ReturnType<typeof useLocation>): { from: str
   return { from: from || '/' };
 }
 
+function AdminOnly({ children }: { children: ReactNode }): JSX.Element {
+  const { profile, loading, error } = useAuth();
+
+  // Wait for the profile before deciding whether a deep link is allowed. This
+  // avoids redirecting a valid admin while the initial profile request is in flight.
+  if (loading || (!profile && !error)) {
+    return <PageFallback />;
+  }
+
+  const isAdmin = profile?.roles?.some((role) => role.trim().toLowerCase() === 'admin') ?? false;
+  return isAdmin ? <>{children}</> : <Navigate to="/control-room" replace />;
+}
+
 export function App(): JSX.Element {
   const { isAuthenticated } = useAuth();
   const location = useLocation();
@@ -262,6 +276,7 @@ export function App(): JSX.Element {
                 <Route path="reports" element={<Navigate to="/compliance?tab=reports" replace />} />
                 {/* Network Security (PR 3) — consolidated tab surface. */}
                 <Route path="security/network" element={<NetworkSecurity />} />
+                <Route path="network-devices" element={<NetworkDevices />} />
                 <Route path="security/siem" element={<SIEMCoverage />} />
                 <Route path="security/webservers" element={<WebserverAutoControl />} />
                 {/* Patch Management (PR 4) */}
@@ -272,7 +287,7 @@ export function App(): JSX.Element {
                 <Route path="connections" element={<Navigate to="/security/network?tab=connections" replace />} />
                 <Route path="sessions" element={<Sessions />} />
                 <Route path="dashboards" element={<Navigate to="/control-room" replace />} />
-                <Route path="roles" element={<Roles />} />
+                <Route path="roles" element={<AdminOnly><Roles /></AdminOnly>} />
                 <Route path="audit" element={<Audit />} />
                 <Route path="users" element={<Users />} />
                 <Route path="telemetry" element={<Telemetry />} />

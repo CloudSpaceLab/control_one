@@ -72,6 +72,7 @@ const node: NodeSummary = {
   arch: 'amd64',
   public_ip: '203.0.113.10',
   state: 'active',
+  target_type: 'server',
   last_seen_at: new Date().toISOString(),
   agent_version: '1.2.3',
   labels: {},
@@ -185,6 +186,26 @@ describe('Nodes page production hardening', () => {
     expect(await screen.findByText('Observed IP')).toBeInTheDocument();
     expect(screen.getByText('198.51.100.44')).toBeInTheDocument();
     expect(screen.queryByText('203.0.113.10')).not.toBeInTheDocument();
+  });
+
+  it('keeps agent-managed compute classification visible in the Nodes inventory', async () => {
+    const user = userEvent.setup();
+    const endpoint: NodeSummary = {
+      ...node,
+      id: 'node-2',
+      hostname: 'finance-laptop-07',
+      target_type: 'laptop',
+    };
+    mocks.listNodes.mockResolvedValueOnce(paginated([node, endpoint]));
+    renderNodes();
+
+    await user.click(await screen.findByRole('button', { name: /show node table/i }));
+
+    expect(await screen.findByText('Type')).toBeInTheDocument();
+    expect(screen.getByText('server')).toBeInTheDocument();
+    expect(screen.getByText('laptop')).toBeInTheDocument();
+    expect(screen.getAllByText('core-api-01').length).toBeGreaterThan(1);
+    expect(screen.getAllByText('finance-laptop-07').length).toBeGreaterThan(1);
   });
 
   it('plots only backend IP geolocation evidence and does not call per-node enrichment', async () => {

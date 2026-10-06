@@ -144,7 +144,7 @@ type alertReopener interface {
 func (s *Server) handleAlertsCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		principal, ok := s.authorize(w, r, roleViewer)
+		principal, ok := s.authorizePermission(w, r, "alerts.read", roleViewer)
 		if !ok {
 			return
 		}
@@ -184,11 +184,11 @@ func (s *Server) handleAlertSubroutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		principal, ok := s.authorize(w, r, roleViewer)
+		principal, ok := s.authorizePermission(w, r, "alerts.read", roleViewer)
 		if !ok {
 			return
 		}
-		a, ok := s.requireAlertTenantAccess(w, r, principal, id, roleViewer, roleOperator, roleInvestigator, roleAdmin)
+		a, ok := s.requireAlertTenantAccess(w, r, principal, id)
 		if !ok {
 			return
 		}

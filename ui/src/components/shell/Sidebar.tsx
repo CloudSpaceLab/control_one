@@ -14,6 +14,7 @@ import {
   ScanSearch,
   Server,
   ShieldAlert,
+  ShieldCheck,
   ShieldQuestion,
   Sparkles,
   Users,
@@ -37,6 +38,7 @@ interface NavItemDef {
   label: string;
   icon: LucideIcon;
   roles?: string[];
+  permissions?: string[];
   badge?: ReactNode;
 }
 
@@ -53,8 +55,8 @@ const NAV_GROUPS: NavGroupDef[] = [
     label: 'Home',
     items: [
       { to: '/', label: 'Control Room', icon: Activity },
-      { to: '/alerts', label: 'Alerts', icon: AlertTriangle, badge: <AlertStatusBadge /> },
-      { to: '/cases', label: 'Cases', icon: ClipboardList },
+      { to: '/alerts', label: 'Alerts', icon: AlertTriangle, permissions: ['alerts.read'], badge: <AlertStatusBadge /> },
+      { to: '/cases', label: 'Cases', icon: ClipboardList, permissions: ['cases.read'], roles: ['investigator', 'operator', 'admin'] },
       {
         to: '/team-activity',
         label: 'Team activity',
@@ -80,6 +82,7 @@ const NAV_GROUPS: NavGroupDef[] = [
         badge: <NodeStatusBadge />,
       },
       { to: '/security/network', label: 'Network & exposure', icon: Network },
+      { to: '/network-devices', label: 'Network devices', icon: Network, permissions: ['targets.read'], roles: ['admin', 'operator', 'viewer', 'investigator', 'ciso'] },
       { to: '/observability', label: 'Observability', icon: Database },
       { to: '/security/siem', label: 'SIEM coverage', icon: DatabaseZap },
       { to: '/rules', label: 'Detection rules', icon: ScanSearch },
@@ -97,17 +100,23 @@ const NAV_GROUPS: NavGroupDef[] = [
       { to: '/coverage', label: 'Coverage', icon: ShieldQuestion },
       { to: '/compliance', label: 'Compliance', icon: ShieldAlert },
       { to: '/access', label: 'Access', icon: KeyRound },
-      { to: '/audit', label: 'Audit log', icon: FileText },
+      { to: '/audit', label: 'Audit log', icon: FileText, permissions: ['audit.read'], roles: ['operator', 'admin'] },
+      { to: '/roles', label: 'Roles & permissions', icon: ShieldCheck, roles: ['admin'] },
     ],
   },
 ];
 
-function filterGroups(groups: NavGroupDef[], userRoles: string[]): NavGroupDef[] {
+function filterGroups(groups: NavGroupDef[], userRoles: string[], userPermissions?: string[]): NavGroupDef[] {
   const isAdmin = userRoles.includes('admin');
+  const permissions = userPermissions ? new Set(userPermissions.map((permission) => permission.toLowerCase())) : null;
   return groups
     .map((g) => ({
       label: g.label,
       items: g.items.filter((item) => {
+        if (isAdmin && item.roles?.includes('admin')) return true;
+        if (item.permissions && permissions) {
+          return item.permissions.some((permission) => permissions.has(permission.toLowerCase()));
+        }
         if (!item.roles || item.roles.length === 0) return true;
         if (isAdmin) return true;
         return item.roles.some((r) => userRoles.includes(r));
@@ -125,6 +134,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 export interface SidebarProps {
   userRoles: string[];
+  userPermissions?: string[];
   /** When true, render in a slide-out sheet (mobile) — always expanded, no rail. */
   variant?: 'desktop' | 'sheet';
   onNavigate?: () => void;
@@ -190,7 +200,7 @@ function NavRow({ item, collapsed, onNavigate }: NavRowProps) {
   );
 }
 
-export function Sidebar({ userRoles, variant = 'desktop', onNavigate }: SidebarProps) {
+export function Sidebar({ userRoles, userPermissions, variant = 'desktop', onNavigate }: SidebarProps) {
   const [pinned, setPinned] = useLocalStorage<boolean>('co.sidebar.pinned', true);
   const collapsed = variant === 'desktop' && !pinned;
 
@@ -208,7 +218,7 @@ export function Sidebar({ userRoles, variant = 'desktop', onNavigate }: SidebarP
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [variant, setPinned]);
 
-  const groups = filterGroups(NAV_GROUPS, userRoles);
+  const groups = filterGroups(NAV_GROUPS, userRoles, userPermissions);
 
   const isSheet = variant === 'sheet';
   const widthClass = isSheet

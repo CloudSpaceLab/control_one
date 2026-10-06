@@ -36,6 +36,7 @@ import type {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { useTenant } from '@/providers/TenantProvider';
+import { NetworkObservabilityPanel } from '@/components/NetworkTelemetryPanel';
 
 type ObservabilityState =
   | 'healthy'
@@ -310,7 +311,7 @@ export function Observability(): JSX.Element {
       ) : null}
 
       <ServiceInventory tenantId={tenantId} tenantLabel={tenantLabel} />
-
+      <NetworkObservabilityPanel key={tenantId ?? 'all'} tenantId={tenantId} />
       {services.length > 0 && selected && dbService && selectedChunk ? (
         <>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">

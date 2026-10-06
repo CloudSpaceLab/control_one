@@ -14,14 +14,14 @@ import {
 } from '../components/kit';
 import { ConfirmModal } from '../components/ConfirmModal';
 
-// CISO admin's RBAC console.
+// Administrator's RBAC console.
 //
 //  - Lists every role, every permission, and a checkbox grid showing
 //    which role has which permission.
 //  - Toggling a custom-role checkbox writes through PUT /api/v1/roles/{id}/permissions
 //    immediately so the change is live for next-request.
 //  - Custom roles can be created (admin-only) at the top.
-//  - Built-in roles are read-only baselines and cannot be deleted.
+//  - Built-in roles can be edited by administrators but cannot be deleted.
 
 const BUILTIN_ROLE_NAMES = new Set(['admin', 'ciso', 'investigator', 'operator', 'viewer']);
 
@@ -124,7 +124,7 @@ export function Roles(): JSX.Element {
       <SectionHeader
         eyebrow="GOVERNANCE · RBAC"
         title="Roles & permissions"
-        description="CISO admins regulate exactly what custom roles can do. Built-in roles stay visible as read-only permission baselines."
+        description="Administrators can grant or restrict permissions for every role. Built-in roles remain protected from deletion."
         actions={
           <Button
             variant="primary"
@@ -236,29 +236,20 @@ export function Roles(): JSX.Element {
                         </td>
                         {roles.map((r) => {
                           const has = r.permissions.includes(p.name);
-                          const builtIn = isBuiltInRole(r);
                           const permissionKey = `${r.id}:${p.name}`;
                           const savingThisPermission = updatingPermissionKey === permissionKey;
-                          const checkboxLabel = builtIn
-                            ? `Built-in role ${r.name} ${has ? 'includes' : 'does not include'} ${p.name}`
-                            : `${has ? 'Revoke' : 'Grant'} ${p.name} for ${r.name}`;
+                          const checkboxLabel = `${has ? 'Revoke' : 'Grant'} ${p.name} for ${r.name}`;
                           return (
                             <td key={`${r.id}-${p.name}`} className="text-center px-3 py-2">
                               <input
                                 type="checkbox"
-                                className={`h-4 w-4 rounded border-border-subtle accent-brand-500 ${
-                                  builtIn ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
-                                }`}
+                                className="h-4 w-4 rounded border-border-subtle accent-brand-500 cursor-pointer"
                                 aria-label={checkboxLabel}
                                 checked={has}
-                                disabled={builtIn || updatingPermissionKey !== null}
+                                disabled={updatingPermissionKey !== null}
                                 onChange={(e) => togglePermission(r, p.name, e.target.checked)}
                                 title={
-                                  builtIn
-                                    ? 'Built-in role baseline'
-                                    : savingThisPermission
-                                      ? 'Saving permission change'
-                                      : undefined
+                                  savingThisPermission ? 'Saving permission change' : undefined
                                 }
                               />
                             </td>

@@ -3,6 +3,11 @@ http:
   read_timeout: 15s
   write_timeout: 15s
 
+# Explicit destinations permitted for read-only appliance connection tests.
+# Empty denies all probes. Credentials require the existing secrets sealer.
+network_onboarding:
+  allowed_cidrs: [] # e.g. ["192.168.10.0/24"]
+
 tls:
   enabled: false
   cert_file: ""

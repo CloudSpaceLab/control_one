@@ -79,29 +79,30 @@ describe('Roles', () => {
     expect(screen.queryByRole('button', { name: /delete/i })).not.toBeInTheDocument();
   });
 
-  it('renders built-in role permissions as read-only baselines', async () => {
+  it('allows administrators to edit built-in role permissions', async () => {
     const user = userEvent.setup();
 
     render(<Roles />);
 
     const included = await screen.findByRole('checkbox', {
-      name: 'Built-in role admin includes roles.read',
+      name: 'Revoke roles.read for admin',
     });
     const missing = screen.getByRole('checkbox', {
-      name: 'Built-in role admin does not include roles.write',
+      name: 'Grant roles.write for admin',
     });
     const custom = screen.getByRole('checkbox', { name: /grant roles.write for soc-reviewer/i });
 
     expect(included).toBeChecked();
-    expect(included).toBeDisabled();
+    expect(included).toBeEnabled();
     expect(missing).not.toBeChecked();
-    expect(missing).toBeDisabled();
+    expect(missing).toBeEnabled();
     expect(custom).toBeEnabled();
 
     await user.click(included);
     await user.click(missing);
 
-    expect(mocks.setRolePermissions).not.toHaveBeenCalled();
+    expect(mocks.setRolePermissions).toHaveBeenNthCalledWith(1, 'role-admin-live', []);
+    expect(mocks.setRolePermissions).toHaveBeenNthCalledWith(2, 'role-admin-live', ['roles.write']);
   });
 
   it('does not show a false empty state when role data fails to load', async () => {

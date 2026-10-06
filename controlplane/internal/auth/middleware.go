@@ -177,7 +177,7 @@ func contentPackCollectorSelfServicePath(path string) bool {
 		return false
 	}
 	switch parts[1] {
-	case "heartbeat", "desired-config", "apply-result":
+	case "heartbeat", "desired-config", "apply-result", "network-reports", "network-events", "network-otlp", "network-bindings":
 		return true
 	default:
 		return false

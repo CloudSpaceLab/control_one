@@ -552,11 +552,13 @@ describe("SIEMCoverage", () => {
     render(<SIEMCoverage />);
 
     expect(await screen.findByText("All tenants · source coverage and connector decisions.")).toBeInTheDocument();
-    expectKpiValue("Sources", "12");
-    expectKpiValue("Collecting", "7");
-    expectKpiValue("Degraded", "3");
-    expectKpiValue("Proposals", "30");
-    expectKpiValue("Needs approval", "7");
+    await waitFor(() => {
+      expectKpiValue("Sources", "12");
+      expectKpiValue("Collecting", "7");
+      expectKpiValue("Degraded", "3");
+      expectKpiValue("Proposals", "30");
+      expectKpiValue("Needs approval", "7");
+    });
     expect(mocks.getTenantConnectorPolicy).not.toHaveBeenCalled();
     expect(mocks.listContentPackEdgeCollectors).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /^save$/i })).not.toBeInTheDocument();

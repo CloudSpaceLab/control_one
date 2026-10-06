@@ -2,18 +2,15 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-
-	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
-// RBAC + permissions endpoints. CISO-admin-grade UI uses these to
-// configure who has access to what.
+// RBAC + permissions endpoints. The administrator uses these to configure
+// who has access to what.
 //
 //   GET  /api/v1/permissions                — catalog
 //   GET  /api/v1/roles/permissions          — every role + its grants
@@ -27,7 +24,7 @@ func (s *Server) handlePermissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
 		return
 	}
 	perms, err := s.store.ListPermissions(r.Context())
@@ -45,7 +42,7 @@ func (s *Server) handleRolesWithPermissions(w http.ResponseWriter, r *http.Reque
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	if _, ok := s.authorize(w, r, roleAdmin); !ok {
 		return
 	}
 	roles, err := s.store.ListRolesWithPermissions(r.Context())
@@ -116,10 +113,6 @@ func (s *Server) handleRoleSubroutes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.store.SetRolePermissions(r.Context(), roleID, body.Permissions); err != nil {
-			if errors.Is(err, storage.ErrBuiltInRoleImmutable) {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
 			s.logger.Error("set role permissions", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
