@@ -23,6 +23,9 @@ async function enterCredentials() {
 describe('Network device verification wizard', () => {
   it('tests only a secret reference and requires classification review before saving', async () => {
     render(<NetworkDeviceWizard onSaved={mocks.saved} onCancel={mocks.cancel} />);
+    const snapshotOption = screen.getByRole('option', { name: 'NETCONF / RESTCONF / vendor API (snapshot sources; not for identity test)' });
+    expect(snapshotOption).toBeDisabled();
+    expect(screen.getByText(/Configure snapshot sources separately under Network telemetry sources/)).toBeInTheDocument();
     const user = await enterCredentials();
     await user.click(screen.getByRole('button', { name: 'Test connection' }));
     expect(await screen.findByText('Classification needs review')).toBeInTheDocument();

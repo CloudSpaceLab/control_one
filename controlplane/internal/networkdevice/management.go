@@ -182,7 +182,16 @@ func PollManagement(ctx context.Context, host, ip, source string, m ManagementCo
 	if err != nil {
 		return "unsupported", nil
 	}
+	record["adapter"] = snapshotAdapter(source, m.Adapter)
+	record["adapter_version"] = "management-read/v1"
 	return "ready", []map[string]any{record}
+}
+
+func snapshotAdapter(source, adapter string) string {
+	if source == "ssh_config" {
+		return "ssh_config/" + adapter
+	}
+	return source
 }
 
 type snapshotOutput struct {
@@ -391,17 +400,19 @@ func pollHTTPS(ctx context.Context, host, ip, source string, m ManagementConfig)
 	if err != nil {
 		return "unsupported", nil
 	}
+	record["adapter"] = source
+	record["adapter_version"] = "management-read/v1"
 	return "ready", []map[string]any{record}
 }
 
 func sensitiveField(key string) bool {
 	key = strings.ToLower(key)
-	for _, word := range []string{"password", "secret", "community", "token", "private-key", "private_key", "credential", "authentication-key", "encryption-key"} {
+	for _, word := range []string{"password", "secret", "community", "token", "private-key", "private_key", "credential", "authentication", "auth", "priv", "encryption-key", "encryption_key", "passphrase", "key-string", "key_string", "authorization", "pre-shared", "pre_shared", "psk"} {
 		if strings.Contains(key, word) {
 			return true
 		}
 	}
-	return false
+	return key == "key" || strings.HasPrefix(key, "key ") || strings.Contains(key, " key ") || strings.HasSuffix(key, " key")
 }
 
 // Snapshots are sanitized before hashing and forwarding. Bodies exceeding the
@@ -462,9 +473,11 @@ func snapshotRecord(raw []byte, format string, secrets []string) (map[string]any
 		}
 		clean = out.Bytes()
 	default:
-		lines := strings.Split(string(raw), "\n")
+		text := strings.ReplaceAll(strings.ReplaceAll(strings.ToValidUTF8(string(raw), ""), "\r\n", "\n"), "\r", "\n")
+		lines := strings.Split(text, "\n")
 		private := false
 		for i, line := range lines {
+			line = strings.TrimRight(line, " \t")
 			if strings.Contains(line, "BEGIN ") && strings.Contains(line, "PRIVATE KEY") {
 				private = true
 			}

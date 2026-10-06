@@ -76,6 +76,39 @@ export interface NetworkInventoryStatus {
   completed_at?: string;
   snapshot?: NetworkInventorySnapshot;
 }
+export interface NetworkConfigurationFinding {
+  id: string;
+  status: 'finding' | 'not_observed' | 'unsupported';
+  severity?: string;
+  title: string;
+  evidence?: string[];
+  snapshot_id?: string;
+  evidence_ref?: string;
+  related_evidence_ref?: string;
+}
+export interface NetworkConfigurationSnapshot {
+  id: string;
+  tenant_id: string;
+  target_id: string;
+  source_id: string;
+  source_type: string;
+  adapter: string;
+  adapter_version: string;
+  format: string;
+  content: string;
+  content_hash: string;
+  revision: number;
+  observed_at: string;
+  created_at: string;
+  added: string[];
+  removed: string[];
+  findings: NetworkConfigurationFinding[];
+}
+export interface NetworkConfigurationHistory {
+  target_id: string;
+  state: 'ready' | 'not_collected';
+  snapshots: NetworkConfigurationSnapshot[];
+}
 
 export interface NetworkCredentialConfig {
   username: string;
@@ -2845,6 +2878,10 @@ export class APIClient {
 
   async refreshNetworkInventory(id: string): Promise<NetworkInventoryStatus> {
     return this.request(`/api/v1/network-inventory/${encodeURIComponent(id)}`, { method: 'POST', body: '{}' });
+  }
+
+  async getNetworkConfiguration(id: string): Promise<NetworkConfigurationHistory> {
+    return this.request(`/api/v1/network-configuration/${encodeURIComponent(id)}`);
   }
 
   async listNodes(

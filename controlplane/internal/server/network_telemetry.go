@@ -38,6 +38,10 @@ type networkTelemetryStore interface {
 	ResolveNetworkSyslogSource(context.Context, uuid.UUID, string, string) (*storage.NetworkSource, error)
 }
 
+type networkConfigurationSnapshotStore interface {
+	SaveNetworkConfigurationSnapshot(context.Context, uuid.UUID, string, uuid.UUID, string, time.Time, networkdevice.ConfigurationSnapshot) (*storage.NetworkConfigurationSnapshot, error)
+}
+
 func (s *Server) handleCollectorNetworkBindings(w http.ResponseWriter, r *http.Request, collector string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -203,6 +207,24 @@ func (s *Server) handleNetworkSourceReports(w http.ResponseWriter, r *http.Reque
 			events = append(events, IngestedEvent{Type: "network.snmp", TS: report.ObservedAt, TenantID: tenant.String(), Collector: "snmp", ParserStatus: "parsed", Details: map[string]any{"target_id": source.TargetID.String(), "source_instance_id": source.ID.String(), "source_type": source.SourceType, "collector_id": collector, "metrics": report.Metrics}})
 		}
 		for _, record := range report.Records {
+			if isConfigurationSource(source.SourceType) {
+				configuration, ok := configurationSnapshotFromRecord(source.SourceType, record)
+				if !ok {
+					http.Error(w, "invalid sanitized configuration snapshot", 400)
+					return
+				}
+				snapshotStore, ok := s.store.(networkConfigurationSnapshotStore)
+				if !ok {
+					http.Error(w, "configuration snapshot storage unavailable", 503)
+					return
+				}
+				snapshot, err := snapshotStore.SaveNetworkConfigurationSnapshot(r.Context(), tenant, collector, source.ID, source.SourceType, report.ObservedAt, configuration)
+				if err != nil || snapshot == nil {
+					http.Error(w, "configuration snapshot could not be safely persisted", 422)
+					return
+				}
+				record = map[string]any{"snapshot_id": snapshot.ID.String(), "revision": snapshot.Revision, "format": snapshot.Format, "adapter": snapshot.Adapter, "adapter_version": snapshot.AdapterVersion, "sha256": snapshot.ContentHash, "snapshot": snapshot.Content, "sanitized": true}
+			}
 			events = append(events, IngestedEvent{Type: "network." + source.SourceType, TS: report.ObservedAt, TenantID: tenant.String(), Collector: source.SourceType, ParserStatus: "parsed", Details: map[string]any{"target_id": source.TargetID.String(), "source_instance_id": source.ID.String(), "source_type": source.SourceType, "collector_id": collector, "record": record}})
 		}
 	}
@@ -227,6 +249,38 @@ func (s *Server) handleNetworkSourceReports(w http.ResponseWriter, r *http.Reque
 		}
 	}
 	writeJSON(w, 200, map[string]string{"status": "recorded"})
+}
+
+func isConfigurationSource(source string) bool {
+	switch source {
+	case "ssh_config", "netconf", "restconf", "vendor_api":
+		return true
+	default:
+		return false
+	}
+}
+
+func configurationSnapshotFromRecord(source string, record map[string]any) (networkdevice.ConfigurationSnapshot, bool) {
+	format, formatOK := record["format"].(string)
+	content, contentOK := record["snapshot"].(string)
+	adapter, adapterOK := record["adapter"].(string)
+	version, versionOK := record["adapter_version"].(string)
+	sanitized, sanitizedOK := record["sanitized"].(bool)
+	if !formatOK || !contentOK || !adapterOK || !versionOK || !sanitizedOK || !sanitized {
+		return networkdevice.ConfigurationSnapshot{}, false
+	}
+	validAdapter := adapter == source
+	if source == "ssh_config" {
+		validAdapter = adapter == "ssh_config/cisco" || adapter == "ssh_config/juniper" || adapter == "ssh_config/fortinet"
+	}
+	if !validAdapter {
+		return networkdevice.ConfigurationSnapshot{}, false
+	}
+	snapshot, err := networkdevice.NormalizeConfigurationSnapshot(adapter, version, format, content)
+	if err != nil {
+		return networkdevice.ConfigurationSnapshot{}, false
+	}
+	return snapshot, true
 }
 
 type networkSyslogEvent struct {

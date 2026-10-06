@@ -1177,6 +1177,7 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/targets/", s.handleTargetResource)
 	s.baseRouter.HandleFunc("/api/v1/network-onboarding/", s.handleNetworkOnboarding)
 	s.baseRouter.HandleFunc("/api/v1/network-inventory/", s.handleNetworkInventory)
+	s.baseRouter.HandleFunc("/api/v1/network-configuration/", s.handleNetworkConfiguration)
 	s.baseRouter.HandleFunc("/api/v1/network-telemetry/", s.handleNetworkTelemetry)
 	s.baseRouter.HandleFunc("/api/v1/knowledge-graph/", s.handleKnowledgeGraph)
 	s.baseRouter.HandleFunc("/api/v1/ai/config", s.handleAIConfig)

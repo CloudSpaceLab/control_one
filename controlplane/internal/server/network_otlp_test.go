@@ -19,8 +19,18 @@ import (
 
 type networkCollectorAPIStore struct {
 	*contentPackSnapshotFakeStore
-	source  storage.NetworkSource
-	reports []networkdevice.SourceReport
+	source    storage.NetworkSource
+	reports   []networkdevice.SourceReport
+	snapshots []storage.NetworkConfigurationSnapshot
+}
+
+func (f *networkCollectorAPIStore) SaveNetworkConfigurationSnapshot(_ context.Context, tenant uuid.UUID, collector string, sourceID uuid.UUID, sourceType string, observed time.Time, snapshot networkdevice.ConfigurationSnapshot) (*storage.NetworkConfigurationSnapshot, error) {
+	if tenant != f.source.TenantID || collector != f.source.CollectorID || sourceID != f.source.ID || sourceType != f.source.SourceType {
+		return nil, sql.ErrNoRows
+	}
+	row := storage.NetworkConfigurationSnapshot{ID: uuid.New(), TenantID: tenant, TargetID: f.source.TargetID, SourceID: sourceID, SourceType: sourceType, Adapter: snapshot.Adapter, AdapterVersion: snapshot.AdapterVersion, Format: snapshot.Format, Content: snapshot.Content, ContentHash: snapshot.ContentHash, Revision: len(f.snapshots) + 1, ObservedAt: observed}
+	f.snapshots = append(f.snapshots, row)
+	return &row, nil
 }
 
 func (f *networkCollectorAPIStore) GetCollectorNetworkSource(_ context.Context, tenant uuid.UUID, collector string, id uuid.UUID) (*storage.NetworkSource, error) {
@@ -60,6 +70,30 @@ func TestSNMPMetricReportCanonicalIdentityAndReplay(t *testing.T) {
 	report.BindingID = id.String()
 	report.Metrics = map[string]float64{"password": 1}
 	require.Equal(t, 400, request(report).Code)
+}
+
+func TestNetworkConfigurationReportIsRedactedBeforeJournalPersistence(t *testing.T) {
+	tenant, target, id := uuid.New(), uuid.New(), uuid.New()
+	collector, token := "edge-config", "c1ec_fixture_only"
+	f := &networkCollectorAPIStore{contentPackSnapshotFakeStore: &contentPackSnapshotFakeStore{fakeStore: &fakeStore{}, collectors: []storage.ContentPackEdgeCollector{{TenantID: tenant, CollectorID: collector, Status: "healthy"}}, collectorTokens: map[string]string{contentPackTestCollectorTokenKey(tenant, collector): token}}, source: storage.NetworkSource{ID: id, TenantID: tenant, TargetID: target, CollectorID: collector, SourceType: "ssh_config"}}
+	s := New(zap.NewNop(), &config.Config{}, f, nil)
+	now := time.Now().UTC().Add(-time.Second)
+	report := networkdevice.SourceReport{BindingID: id.String(), State: "ready", ObservedAt: now, LastContactAt: &now, Records: []map[string]any{{"adapter": "ssh_config/cisco", "adapter_version": "management-read/v1", "format": "text", "sanitized": true, "snapshot": "hostname edge\nsnmp-server community PERSISTENCE_SENTINEL ro\ntransport input telnet"}}}
+	body, err := json.Marshal(map[string]any{"reports": []networkdevice.SourceReport{report}})
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/content-packs/collectors/"+collector+"/network-reports?tenant_id="+tenant.String(), strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Len(t, f.snapshots, 1)
+	require.NotContains(t, f.snapshots[0].Content, "PERSISTENCE_SENTINEL")
+	require.Contains(t, f.snapshots[0].Content, "[redacted]")
+	require.Len(t, f.eventIngestRecords, 1)
+	require.NotContains(t, string(f.eventIngestRecords[0].Payload), "PERSISTENCE_SENTINEL")
+	require.Contains(t, string(f.eventIngestRecords[0].Payload), f.snapshots[0].ContentHash)
+	require.Contains(t, string(f.eventIngestRecords[0].Payload), "transport input telnet")
 }
 
 func (f *networkCollectorAPIStore) ListNetworkSources(context.Context, uuid.UUID, storage.TargetAccess) ([]storage.NetworkSource, error) {

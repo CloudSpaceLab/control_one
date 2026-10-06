@@ -14,9 +14,14 @@ does not prove that a receiver or poller is deployed.
 2. Open **Network devices**, then select the onboarded network device.
 3. Scroll to **Network telemetry sources**. Review each source separately;
    unconfigured and unsupported integrations remain explicit.
-4. Click **Configure source binding**. Choose **Syslog** or **SNMP polling**,
-   enter the existing tenant collector ID and its assigned collection site.
-5. For Syslog, enter the device's transport sender IP as seen by that collector.
+4. Click **Configure source binding** and choose the source you are assigning:
+   **Syslog**, **SNMP polling**, **SNMP traps**, **NetFlow**, **IPFIX**,
+   **sFlow**, or a configuration source (**SSH config snapshot**, **NETCONF**,
+   **RESTCONF**, or **Vendor API**). Enter the existing tenant collector ID
+   and its assigned collection site. Configuration snapshot sources require
+   matching local adapter settings on the site collector; see
+   [network-device-configuration.md](network-device-configuration.md).
+5. For receiver sources (Syslog, traps, and Flow), enter the device's transport sender IP as seen by that collector.
    With NAT, use the observed sender address. A shared NAT address cannot be
    assigned to several devices on one collector; use separate collectors or
    distinct transport identities. Message hostnames never determine ownership.
@@ -29,8 +34,12 @@ does not prove that a receiver or poller is deployed.
    source readiness**. These are protocol sources, not processes or services.
    Device pagination and All tenants reads use the existing authorized target API.
 
-Product operators do not need shell commands for this workflow. Receiver/poller
-deployment and credentials remain platform/collector administration work.
+Product operators do not need shell commands to save a source binding. Receiver,
+poller, or management-adapter deployment and credentials remain
+platform/collector administration work. The Add device wizard's protocol menu
+is a separate one-time identity test and currently supports SNMPv3 and SSH;
+NETCONF, RESTCONF, and vendor API are configured as snapshot sources after the
+device is saved.
 
 ## Recurring SNMP site collector
 
