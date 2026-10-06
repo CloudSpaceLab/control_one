@@ -73,7 +73,17 @@ func TestManagementRecordsUseAssignedSourceIdentity(t *testing.T) {
 			f := &networkCollectorAPIStore{contentPackSnapshotFakeStore: &contentPackSnapshotFakeStore{fakeStore: &fakeStore{}, collectors: []storage.ContentPackEdgeCollector{{TenantID: tenant, CollectorID: collector, Status: "healthy"}}, collectorTokens: map[string]string{contentPackTestCollectorTokenKey(tenant, collector): token}}, source: storage.NetworkSource{ID: id, TenantID: tenant, TargetID: target, CollectorID: collector, SourceType: source}}
 			s := New(zap.NewNop(), &config.Config{}, f, nil)
 			now := time.Now().UTC()
-			body, _ := json.Marshal(map[string]any{"reports": []any{map[string]any{"binding_id": id.String(), "state": "ready", "observed_at": now, "last_contact_at": now, "records": []any{map[string]any{"snapshot": "hostname fixture", "sanitized": true}}}}})
+			record := map[string]any{"snapshot": "hostname fixture", "sanitized": true}
+			if source != "snmp_trap" {
+				adapter := source
+				if source == "ssh_config" {
+					adapter = "ssh_config/cisco"
+				}
+				record["adapter"] = adapter
+				record["adapter_version"] = "management-read/v1"
+				record["format"] = "text"
+			}
+			body, _ := json.Marshal(map[string]any{"reports": []any{map[string]any{"binding_id": id.String(), "state": "ready", "observed_at": now, "last_contact_at": now, "records": []any{record}}}})
 			r := httptest.NewRequest(http.MethodPost, "/api/v1/content-packs/collectors/"+collector+"/network-reports?tenant_id="+tenant.String(), strings.NewReader(string(body)))
 			r.Header.Set("Authorization", "Bearer "+token)
 			w := httptest.NewRecorder()
