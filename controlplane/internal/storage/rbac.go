@@ -360,6 +360,94 @@ func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, 
 	return roles, nil
 }
 
+// ListAccessibleTenants returns only tenants for which the user has one of
+// the supplied roles, including every tenant when a matching global role exists.
+func (s *Store) ListAccessibleTenants(
+	ctx context.Context,
+	userID uuid.UUID,
+	roles []string,
+	prefix string,
+	limit, offset int,
+) ([]Tenant, int, error) {
+	if s.db == nil {
+		return nil, 0, errors.New("store database not initialized")
+	}
+	if userID == uuid.Nil {
+		return nil, 0, errors.New("user id required")
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, errors.New("limit and offset must be non-negative")
+	}
+	roles = sanitizeRoles(roles)
+	if len(roles) == 0 {
+		return []Tenant{}, 0, nil
+	}
+	for i := range roles {
+		roles[i] = strings.ToLower(strings.TrimSpace(roles[i]))
+	}
+
+	args := []any{userID, pq.Array(roles)}
+	clauses := []string{`
+		EXISTS (
+			SELECT 1
+			FROM user_roles ur
+			JOIN roles r ON r.id = ur.role_id
+			WHERE ur.user_id = $1
+			  AND LOWER(r.name) = ANY($2)
+			  AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
+			  AND (ur.tenant_id IS NULL OR ur.tenant_id = t.id)
+		)`,
+	}
+	if prefix = strings.TrimSpace(prefix); prefix != "" {
+		args = append(args, prefix+"%")
+		clauses = append(clauses, fmt.Sprintf("t.name ILIKE $%d", len(args)))
+	}
+	whereSQL := strings.Join(clauses, " AND ")
+
+	var total int
+	if err := s.db.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM tenants t WHERE "+whereSQL,
+		args...,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count accessible tenants: %w", err)
+	}
+
+	query := `
+		SELECT t.id, t.name, t.created_at
+		FROM tenants t
+		WHERE ` + whereSQL + `
+		ORDER BY t.created_at DESC
+	`
+	queryArgs := append([]any(nil), args...)
+	if limit > 0 {
+		queryArgs = append(queryArgs, limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(queryArgs))
+	}
+	if offset > 0 {
+		queryArgs = append(queryArgs, offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(queryArgs))
+	}
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query accessible tenants: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Tenant, 0)
+	for rows.Next() {
+		var tenant Tenant
+		if err := rows.Scan(&tenant.ID, &tenant.Name, &tenant.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan accessible tenant: %w", err)
+		}
+		out = append(out, tenant)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate accessible tenants: %w", err)
+	}
+	return out, total, nil
+}
+
 // UserHasTenantRole returns true when the user has one of the supplied roles
 // either globally (tenant_id NULL) or scoped to the requested tenant.
 func (s *Store) UserHasTenantRole(ctx context.Context, userID, tenantID uuid.UUID, roles []string) (bool, error) {

@@ -537,18 +537,37 @@ func (s *Server) handleListAlerts(w http.ResponseWriter, r *http.Request, princi
 		f.SortOrder = "desc"
 	}
 	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if tenantParam == "" {
-		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
-		return
-	}
-	tid, err := uuid.Parse(tenantParam)
-	if err != nil {
-		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-		return
-	}
-	f.TenantID = tid
-	if !s.requireTenantAccess(w, r, principal, tid) {
-		return
+	if tenantParam != "" {
+		tid, err := uuid.Parse(tenantParam)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		f.TenantID = tid
+		if !s.requireTenantAccess(w, r, principal, tid, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+			return
+		}
+	} else {
+		tenantIDs, err := s.accessibleTenantIDs(
+			r.Context(),
+			principal,
+			roleViewer,
+			roleOperator,
+			roleInvestigator,
+			roleAdmin,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if len(tenantIDs) == 0 {
+			writeJSON(w, http.StatusOK, paginatedResponse[alertResponse]{
+				Data:       []alertResponse{},
+				Pagination: newPaginationMeta(0, limit, offset, 0),
+			})
+			return
+		}
+		f.TenantIDs = tenantIDs
 	}
 	if v := strings.TrimSpace(r.URL.Query().Get("node_id")); v != "" {
 		id, err := uuid.Parse(v)

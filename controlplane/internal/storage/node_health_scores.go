@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // NodeHealthScore is the latest predictive health snapshot for a single
@@ -183,6 +185,22 @@ func (s *Store) GetPredictiveHealthAvailability(
 // is 0 or negative, the default of 49 is used (HIGH + CRIT bands).
 // Calibrating rows are excluded — they're not at-risk, just unknown.
 func (s *Store) ListAtRiskNodes(ctx context.Context, tenantID uuid.UUID, threshold int) ([]AtRiskNodeRow, error) {
+	if tenantID == uuid.Nil {
+		return s.listAtRiskNodesScoped(ctx, nil, threshold)
+	}
+	return s.listAtRiskNodesScoped(ctx, []uuid.UUID{tenantID}, threshold)
+}
+
+// ListAtRiskNodesForTenants constrains predictive-risk rows to the supplied
+// tenant set. Empty scope returns no rows.
+func (s *Store) ListAtRiskNodesForTenants(ctx context.Context, tenantIDs []uuid.UUID, threshold int) ([]AtRiskNodeRow, error) {
+	if len(tenantIDs) == 0 {
+		return []AtRiskNodeRow{}, nil
+	}
+	return s.listAtRiskNodesScoped(ctx, tenantIDs, threshold)
+}
+
+func (s *Store) listAtRiskNodesScoped(ctx context.Context, tenantIDs []uuid.UUID, threshold int) ([]AtRiskNodeRow, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
@@ -191,19 +209,24 @@ func (s *Store) ListAtRiskNodes(ctx context.Context, tenantID uuid.UUID, thresho
 	}
 	clauses := []string{"hs.risk_level <> 'calibrating'", "hs.score <= $1"}
 	args := []any{threshold}
-	if tenantID != uuid.Nil {
-		args = append(args, tenantID)
-		clauses = append(clauses, fmt.Sprintf("n.tenant_id = $%d", len(args)))
+	if len(tenantIDs) > 0 {
+		values := make([]string, 0, len(tenantIDs))
+		for _, tenantID := range tenantIDs {
+			if tenantID != uuid.Nil {
+				values = append(values, tenantID.String())
+			}
+		}
+		if len(values) == 0 {
+			return []AtRiskNodeRow{}, nil
+		}
+		args = append(args, pq.Array(values))
+		clauses = append(clauses, fmt.Sprintf("n.tenant_id = ANY($%d::uuid[])", len(args)))
 	}
 	q := `
 		SELECT hs.node_id, n.tenant_id, n.hostname, hs.score, hs.risk_level, hs.components, hs.computed_at
 		FROM node_health_scores hs
 		JOIN nodes n ON n.id = hs.node_id
-		WHERE ` + clauses[0]
-	for i := 1; i < len(clauses); i++ {
-		q += " AND " + clauses[i]
-	}
-	q += `
+		WHERE ` + strings.Join(clauses, " AND ") + `
 		ORDER BY hs.score ASC, hs.computed_at DESC
 	`
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -211,19 +234,20 @@ func (s *Store) ListAtRiskNodes(ctx context.Context, tenantID uuid.UUID, thresho
 		return nil, fmt.Errorf("list at-risk nodes: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	var out []AtRiskNodeRow
+
+	out := make([]AtRiskNodeRow, 0)
 	for rows.Next() {
-		var r AtRiskNodeRow
+		var row AtRiskNodeRow
 		var raw []byte
-		if err := rows.Scan(&r.NodeID, &r.TenantID, &r.Hostname, &r.Score, &r.RiskLevel, &raw, &r.ComputedAt); err != nil {
+		if err := rows.Scan(&row.NodeID, &row.TenantID, &row.Hostname, &row.Score, &row.RiskLevel, &raw, &row.ComputedAt); err != nil {
 			return nil, fmt.Errorf("scan at-risk node: %w", err)
 		}
-		m, err := decodeJSONBMap(raw)
+		components, err := decodeJSONBMap(raw)
 		if err != nil {
 			return nil, err
 		}
-		r.Components = m
-		out = append(out, r)
+		row.Components = components
+		out = append(out, row)
 	}
 	return out, rows.Err()
 }

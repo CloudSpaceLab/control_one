@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 )
 
@@ -47,10 +49,12 @@ func (s *Server) handlePatchApprovalsCollection(w http.ResponseWriter, r *http.R
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
 			return
 		}
-		s.handleListPatchApprovals(w, r)
+		s.expirePatchApprovals(r.Context())
+		s.handleListPatchApprovals(w, r, principal)
 	default:
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
@@ -85,9 +89,14 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+		principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+		if !ok {
 			return
 		}
+		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleViewer, roleOperator, roleAdmin) {
+			return
+		}
+		s.expirePatchApprovals(r.Context())
 		s.handleGetPatchApproval(w, r, approvalID)
 	case len(segments) == 2 && segments[1] == "approve":
 		if r.Method != http.MethodPost {
@@ -99,6 +108,10 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !ok {
 			return
 		}
+		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleOperator, roleAdmin) {
+			return
+		}
+		s.expirePatchApprovals(r.Context())
 		s.handleApprovePatchApproval(w, r, approvalID, principal.Subject)
 	case len(segments) == 2 && segments[1] == "deny":
 		if r.Method != http.MethodPost {
@@ -110,13 +123,17 @@ func (s *Server) handlePatchApprovalSubroutes(w http.ResponseWriter, r *http.Req
 		if !ok {
 			return
 		}
+		if !s.requirePatchApprovalTenantAccess(w, r, principal, approvalID, roleOperator, roleAdmin) {
+			return
+		}
+		s.expirePatchApprovals(r.Context())
 		s.handleDenyPatchApproval(w, r, approvalID, principal.Subject)
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request, principal *auth.Principal) {
 	limit, offset, err := parseLimitOffset(r.URL.Query())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -133,7 +150,24 @@ func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 			return
 		}
+		if !s.requireTenantAccess(w, r, principal, parsed, roleViewer, roleOperator, roleAdmin) {
+			return
+		}
 		filter.TenantID = parsed
+	} else {
+		tenantIDs, err := s.accessibleTenantIDs(r.Context(), principal, roleViewer, roleOperator, roleAdmin)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if len(tenantIDs) == 0 {
+			writeJSON(w, http.StatusOK, paginatedResponse[patchApprovalResponse]{
+				Data:       []patchApprovalResponse{},
+				Pagination: newPaginationMeta(0, limit, offset, 0),
+			})
+			return
+		}
+		filter.TenantIDs = tenantIDs
 	}
 	if v := strings.TrimSpace(r.URL.Query().Get("deployment_id")); v != "" {
 		parsed, err := uuid.Parse(v)
@@ -168,6 +202,26 @@ func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request
 		Data:       items,
 		Pagination: newPaginationMeta(total, limit, offset, len(items)),
 	})
+}
+
+func (s *Server) requirePatchApprovalTenantAccess(
+	w http.ResponseWriter,
+	r *http.Request,
+	principal *auth.Principal,
+	id uuid.UUID,
+	roles ...string,
+) bool {
+	approval, err := s.store.GetPatchApproval(r.Context(), id)
+	if err != nil {
+		s.logger.Error("get patch approval for tenant access", zap.Error(err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return false
+	}
+	if approval == nil {
+		http.NotFound(w, r)
+		return false
+	}
+	return s.requireTenantAccess(w, r, principal, approval.TenantID, roles...)
 }
 
 func (s *Server) handleGetPatchApproval(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -245,17 +299,19 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 			zap.String("deployment_id", updated.DeploymentID.String()),
 			zap.String("node_id", updated.NodeID.String()),
 		)
-		// We deliberately don't 500 here — the approval flip is durable and
-		// the operator can retry by inspecting the deployment row. Returning
-		// 200 with status=approved + missing job_id signals the failure.
-	} else if state != nil && state.JobID != nil && *state.JobID != uuid.Nil {
-		id := *state.JobID
-		jobID = &id
+		if state != nil {
+			if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, dispErr.Error(), ""); markErr != nil {
+				s.logger.Warn("mark approved patch dispatch failed", zap.Error(markErr), zap.String("node_id", updated.NodeID.String()))
+			}
+		}
+		s.maybeRollupPatchDeployment(r.Context(), updated.DeploymentID)
+	} else {
+		if state != nil && state.JobID != nil && *state.JobID != uuid.Nil {
+			id := *state.JobID
+			jobID = &id
+		}
+		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), updated.DeploymentID, "in_progress", false)
 	}
-
-	// Flip the deployment header so the dashboard moves the row out of
-	// pending. Best-effort; failures don't block the response.
-	_ = s.store.UpdatePatchDeploymentStatus(r.Context(), updated.DeploymentID, "in_progress", false)
 
 	s.emitRemediationSafetyEvent(r.Context(), updated.TenantID, EventPatchApprovalApproved, map[string]any{
 		"approval_id":   updated.ID.String(),
@@ -310,6 +366,19 @@ func (s *Server) handleDenyPatchApproval(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
+	if state, stateErr := s.store.CreateNodePatchState(r.Context(), storage.NodePatchState{
+		DeploymentID: updated.DeploymentID,
+		NodeID:       updated.NodeID,
+		TenantID:     updated.TenantID,
+	}); stateErr != nil {
+		s.logger.Warn("create denied patch state", zap.Error(stateErr), zap.String("node_id", updated.NodeID.String()))
+	} else if state != nil {
+		if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, "patch approval denied", ""); markErr != nil {
+			s.logger.Warn("mark denied patch state failed", zap.Error(markErr), zap.String("node_id", updated.NodeID.String()))
+		}
+	}
+	s.maybeRollupPatchDeployment(r.Context(), updated.DeploymentID)
+
 	s.emitRemediationSafetyEvent(r.Context(), updated.TenantID, EventPatchApprovalDenied, map[string]any{
 		"approval_id":   updated.ID.String(),
 		"tenant_id":     updated.TenantID.String(),
@@ -326,6 +395,15 @@ func (s *Server) handleDenyPatchApproval(w http.ResponseWriter, r *http.Request,
 		"node_id":       updated.NodeID.String(),
 		"mode":          updated.Mode,
 	})
+}
+
+func (s *Server) expirePatchApprovals(ctx context.Context) {
+	if s == nil || s.store == nil {
+		return
+	}
+	if _, err := s.store.ExpirePatchApprovals(ctx, time.Now().UTC()); err != nil {
+		s.logger.Warn("expire patch approvals", zap.Error(err))
+	}
 }
 
 func patchApprovalToResponse(a *storage.PatchApproval, jobID *uuid.UUID) patchApprovalResponse {

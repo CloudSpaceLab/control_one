@@ -15,6 +15,12 @@ const mocks = vi.hoisted(() => {
     createAuditReport,
     downloadAuditReport,
     saveBlob,
+    currentTenantId: 'tenant-2' as string | null,
+    tenantList: [
+      { id: 'tenant-1', name: 'First Tenant', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Active Bank', created_at: '2026-01-01T00:00:00Z' },
+    ],
+    setCurrentTenantId: vi.fn(),
     apiClient: {
       listAuditReports,
       createAuditReport,
@@ -27,22 +33,18 @@ vi.mock('../hooks/useApiClient', () => ({
   useApiClient: () => mocks.apiClient,
 }));
 
-vi.mock('../hooks/useTenants', () => ({
-  useTenants: () => ({
-    data: [
-      { id: 'tenant-1', name: 'First Tenant', created_at: '2026-01-01T00:00:00Z' },
-      { id: 'tenant-2', name: 'Active Bank', created_at: '2026-01-01T00:00:00Z' },
-    ],
+vi.mock('../providers/TenantProvider', () => ({
+  useTenant: () => ({
+    currentTenantId: mocks.currentTenantId,
+    currentTenant: mocks.currentTenantId
+      ? mocks.tenantList.find((tenant) => tenant.id === mocks.currentTenantId) ?? null
+      : null,
+    tenants: mocks.tenantList,
     loading: false,
     error: null,
-    pagination: { total: 2, count: 2, limit: 10, offset: 0, nextOffset: null, prevOffset: null },
-    reload: vi.fn(),
+    setCurrentTenantId: mocks.setCurrentTenantId,
     refresh: vi.fn(),
   }),
-}));
-
-vi.mock('../providers/TenantProvider', () => ({
-  useTenant: () => ({ currentTenantId: 'tenant-2' }),
 }));
 
 vi.mock('../lib/download', () => ({
@@ -73,9 +75,21 @@ function paginated(reports: AuditReport[]) {
   };
 }
 
+function expectKpi(label: string, value: string): void {
+  const labelNode = screen.getByText(label);
+  const tile = labelNode.closest('.group');
+  expect(tile).not.toBeNull();
+  expect(tile).toHaveTextContent(value);
+}
+
 describe('AuditReports production hardening', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.currentTenantId = 'tenant-2';
+    mocks.tenantList = [
+      { id: 'tenant-1', name: 'First Tenant', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Active Bank', created_at: '2026-01-01T00:00:00Z' },
+    ];
     mocks.listAuditReports.mockResolvedValue(paginated([]));
     mocks.createAuditReport.mockResolvedValue(readyReport);
     mocks.downloadAuditReport.mockResolvedValue({
@@ -84,13 +98,47 @@ describe('AuditReports production hardening', () => {
     });
   });
 
+  it('shows exact All tenants report totals without choosing a mutation tenant', async () => {
+    const user = userEvent.setup();
+    mocks.currentTenantId = null;
+    mocks.listAuditReports.mockImplementation(async ({ tenantId, limit, offset }: { tenantId: string; limit: number; offset?: number }) => ({
+      data: [{
+        ...readyReport,
+        id: `report-${tenantId}`,
+        tenant_id: tenantId,
+        framework: tenantId === 'tenant-1' ? 'SOC2' : 'ISO27001',
+      }],
+      pagination: {
+        total: tenantId === 'tenant-1' ? 2 : 3,
+        count: 1,
+        limit,
+        offset: offset ?? 0,
+        nextOffset: null,
+        prevOffset: null,
+      },
+    }));
+
+    render(<AuditReports />);
+
+    expect(await screen.findByText('All tenants · generated compliance reports.')).toBeInTheDocument();
+    await waitFor(() => expectKpi('Reports', '5'));
+    expectKpi('Tenants with reports', '2');
+    expect(screen.queryByRole('button', { name: /generate report/i })).not.toBeInTheDocument();
+    expect(mocks.createAuditReport).not.toHaveBeenCalled();
+
+    const buttons = screen.getAllByRole('button', { name: /open tenant/i });
+    await user.click(buttons[1]);
+    expect(mocks.setCurrentTenantId).toHaveBeenCalledWith('tenant-2');
+  });
+
   it('loads report history for the active tenant instead of the first tenant', async () => {
     render(<AuditReports />);
 
     await waitFor(() => {
       expect(mocks.listAuditReports).toHaveBeenCalledWith({ tenantId: 'tenant-2', limit: 50 });
     });
-    expect(screen.getByLabelText(/report tenant/i)).toHaveValue('tenant-2');
+    expect(screen.queryByLabelText(/report tenant/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Active Bank')).toBeInTheDocument();
   });
 
   it('surfaces report history failures without rendering a false empty state', async () => {
@@ -107,7 +155,7 @@ describe('AuditReports production hardening', () => {
     const user = userEvent.setup();
     render(<AuditReports />);
 
-    await screen.findByLabelText(/report tenant/i);
+    await waitFor(() => expect(mocks.listAuditReports).toHaveBeenCalledWith({ tenantId: 'tenant-2', limit: 50 }));
     await user.type(screen.getByLabelText(/period start/i), '2026-04-01');
     await user.type(screen.getByLabelText(/period end/i), '2026-03-31');
     await user.click(screen.getByRole('button', { name: /generate report/i }));

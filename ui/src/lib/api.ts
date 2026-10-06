@@ -1534,6 +1534,18 @@ export interface LogDumpPreview {
   truncated: boolean;
 }
 
+export interface NodeIPGeo {
+  ip: string;
+  country?: string;
+  country_code?: string;
+  city?: string;
+  region?: string;
+  latitude?: number;
+  longitude?: number;
+  source?: string;
+  geo_dataset_version?: string;
+}
+
 export interface NodeSummary {
   id: string;
   target_id?: string;
@@ -1556,6 +1568,7 @@ export interface NodeSummary {
   install_context?: string;
   classification?: TargetClassificationResponse;
   network_observations?: NetworkObservationResponse[];
+  ip_geo?: NodeIPGeo;
 }
 
 export interface FleetEnrollTarget {
@@ -2526,6 +2539,14 @@ export interface NodeService {
   observed_at: string;
 }
 
+export interface TenantNodeService extends NodeService {
+  node_hostname: string;
+  node_target_type: string;
+  node_state: string;
+  node_last_seen_at?: string;
+}
+
+
 export interface AtRiskNode {
   node_id: string;
   tenant_id: string;
@@ -3125,6 +3146,29 @@ export class APIClient {
     return this.request<{ data: NodeService[] }>(
       `/api/v1/nodes/${encoded}/services`,
     );
+  }
+
+  async listTenantNodeServices(params: {
+    tenantId: string;
+    query?: string;
+    targetScope?: "all" | "server" | "endpoint" | "unknown";
+    limit?: number;
+    offset?: number;
+  }): Promise<PaginatedResponse<TenantNodeService>> {
+    const search = new URLSearchParams();
+    search.set("tenant_id", params.tenantId);
+    if (params.query?.trim()) search.set("q", params.query.trim());
+    if (params.targetScope && params.targetScope !== "all")
+      search.set("target_scope", params.targetScope);
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.offset !== undefined) search.set("offset", String(params.offset));
+    const response = await this.request<RawPaginatedResponse<TenantNodeService>>(
+      `/api/v1/node-services?${search.toString()}`,
+    );
+    return {
+      data: response.data,
+      pagination: normalizePagination(response.pagination),
+    };
   }
 
   async listNodePackages(nodeId: string): Promise<{ data: NodePackage[] }> {
@@ -4812,6 +4856,15 @@ export class APIClient {
     );
   }
 
+  async getPatchSummary(tenantId?: string): Promise<PatchDeploymentSummary> {
+    const search = new URLSearchParams();
+    if (tenantId) search.set("tenant_id", tenantId);
+    const query = search.toString();
+    return this.request<PatchDeploymentSummary>(
+      `/api/v1/patch/summary${query ? `?${query}` : ""}`,
+    );
+  }
+
   async listPatchDeployments(params: {
     tenantId: string;
     limit?: number;
@@ -6456,10 +6509,12 @@ export class APIClient {
 
   // ---- DLP / Data Classification (Sprint 2) --------------------------------
 
-  async deleteDLPRule(id: string): Promise<void> {
-    await this.request<void>(`/api/v1/dlp/rules/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-    });
+  async deleteDLPRule(id: string, tenantId: string): Promise<void> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
+    await this.request<void>(
+      `/api/v1/dlp/rules/${encodeURIComponent(id)}?${search.toString()}`,
+      { method: "DELETE" },
+    );
   }
 
   async listColumnClassifications(params: {
@@ -6491,12 +6546,11 @@ export class APIClient {
     );
   }
 
-  async resolvePIIFinding(id: string): Promise<void> {
+  async resolvePIIFinding(id: string, tenantId: string): Promise<void> {
+    const search = new URLSearchParams({ tenant_id: tenantId });
     await this.request<void>(
-      `/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve`,
-      {
-        method: "POST",
-      },
+      `/api/v1/dlp/findings/${encodeURIComponent(id)}/resolve?${search.toString()}`,
+      { method: "POST" },
     );
   }
 
@@ -7214,6 +7268,35 @@ export interface NodeFirewallRule {
 }
 
 // ── Patch Management (PR 4) ────────────────────────────────────────────────
+
+export interface PatchDeploymentSummary {
+  total: number;
+  pending: number;
+  in_progress: number;
+  completed: number;
+  partial: number;
+  failed: number;
+  pending_approvals: number;
+  expired_approvals: number;
+  active_nodes: number;
+  inventory_nodes: number;
+  fresh_inventory_nodes: number;
+  direct_nodes: number;
+  proxy_nodes: number;
+  airgapped_nodes: number;
+  known_affected_nodes: number;
+  known_active_findings: number;
+  known_critical_findings: number;
+  known_high_findings: number;
+  known_kev_findings: number;
+  known_patchable_findings: number;
+  windows_scheduled: number;
+  windows_open: number;
+  windows_closing: number;
+  proxies_healthy: number;
+  proxies_degraded: number;
+  generated_at: string;
+}
 
 export interface PatchDeployment {
   ID: string;

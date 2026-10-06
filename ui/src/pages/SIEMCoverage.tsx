@@ -36,6 +36,7 @@ import { useApiClient } from "@/hooks/useApiClient";
 import { useAuth } from "@/providers/AuthProvider";
 import { useTenant } from "@/providers/TenantProvider";
 import { saveBlob } from "@/lib/download";
+import { AllTenantSIEMCoverage } from "@/features/siem-coverage/AllTenantSIEMCoverage";
 import type {
   ContentPackEdgeCollector,
   ContentPackOTelConfigCandidate,
@@ -1436,19 +1437,7 @@ export function SIEMCoverage(): JSX.Element {
         : "Reject source proposal";
 
   if (!currentTenantId) {
-    return (
-      <div className="space-y-6">
-        <SectionHeader
-          title="SIEM coverage"
-          description="Connector proposals, source health, and collection policy."
-        />
-        <EmptyState
-          icon={<DatabaseZap />}
-          title="No tenant selected"
-          description="Choose a tenant to load connector coverage."
-        />
-      </div>
-    );
+    return <AllTenantSIEMCoverage />;
   }
 
   return (

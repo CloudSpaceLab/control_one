@@ -76,6 +76,11 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
         description: `${overview.violations.total} organisation-defined rule violations in this period.`,
         body: (
           <div className="space-y-2">
+            {overview.tenant_id === 'all' && overview.violations.total > 0 ? (
+              <p className="text-xs text-text-muted">
+                Highest per-tenant rule samples. The violation total is exact.
+              </p>
+            ) : null}
             {overview.violations.top_rules.length > 0 ? overview.violations.top_rules.map((rule) => (
               <Link
                 key={rule.rule_id}
@@ -91,7 +96,11 @@ function detailContent(detail: ExecutiveDetailKey, overview: ControlRoomExecutiv
                   <span className="font-mono text-sm font-semibold tabular-nums">{rule.count}</span>
                 </div>
               </Link>
-            )) : <p className="text-sm text-text-muted">No rule violations in this period.</p>}
+            )) : (
+              <p className="text-sm text-text-muted">
+                {overview.violations.total > 0 ? 'Rule sample unavailable.' : 'No rule violations in this period.'}
+              </p>
+            )}
             <DetailLink to="/rules" label="View detection rules" />
           </div>
         ),

@@ -7,11 +7,7 @@ import {
   CheckCircle2,
   Clipboard,
   Copy,
-  KeyRound,
-  Network,
   Play,
-  ShieldCheck,
-  Terminal,
   TimerReset,
   Wrench,
 } from 'lucide-react';
@@ -25,7 +21,6 @@ import {
   SheetTrigger,
 } from '@/components/ui/sheet';
 import {
-  KpiTile,
   Panel,
   SectionHeader,
   StatusTag,
@@ -33,11 +28,10 @@ import {
 } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useCoverageMatrix } from '@/hooks/useCoverageMatrix';
-import { useNodes } from '@/hooks/useNodes';
+import { ServiceInventory } from '@/features/observability/ServiceInventory';
 import type {
   ContentPackSourceHealth,
   CoverageMatrixRow,
-  NodeSummary,
   WebserverInstance,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -52,6 +46,7 @@ type ObservabilityState =
   | 'detected_only'
   | 'raw_only'
   | 'unsupported'
+  | 'policy_blocked'
   | 'stale'
   | 'failed';
 
@@ -84,177 +79,27 @@ interface KnowledgeChunk {
   id: string;
   source: string;
   topic: string;
-  state: 'fresh' | 'stale' | 'failed';
+  state: 'fresh' | 'attention' | 'stale' | 'failed';
   summary: string;
   citations: string[];
   openedFrom: string[];
 }
 
-const REFERENCE_SERVICES: ObservabilityService[] = [
-  {
-    id: 'svc-nginx',
-    name: 'nginx edge',
-    kind: 'webserver',
-    state: 'healthy',
-    evidence: ['access log parsed', 'error log parsed', 'vhost inventory'],
-    missing: [],
-    why: 'HTTP evidence is ready for timelines, source-row citations, and webserver control receipts.',
-    nextAction: 'Keep parser version and retention visible in investigations.',
-    cta: 'Open webserver controls',
-    setup: ['Confirm access log path', 'Confirm error log path', 'Verify parser version'],
-    verification: ['logs parsed', 'source rows cited', 'receipt path linked'],
-  },
-  {
-    id: 'svc-fastapi',
-    name: 'Example FastAPI service',
-    kind: 'app framework',
-    state: 'partial',
-    evidence: ['application logs', 'request IDs'],
-    missing: ['native middleware', 'stack traces'],
-    why: 'AI can cite request logs, but incident timelines lose stack traces and handler spans.',
-    nextAction: 'Add middleware instrumentation and verify request correlation.',
-    cta: 'Copy middleware snippet',
-    setup: ['Install package', 'Register middleware', 'Deploy one canary instance'],
-    verification: ['trace ID appears', 'error span appears', 'fallback state clears'],
-    snippet: 'pip install controlone-fastapi\napp.add_middleware(ControlOneMiddleware, redact="strict")',
-  },
-  {
-    id: 'svc-postgres',
-    name: 'PostgreSQL core',
-    kind: 'DBMS',
-    state: 'needs_access',
-    evidence: ['port 5432', 'postgres process', 'app connection fingerprint'],
-    missing: ['audit logs', 'slow query logs', 'role metadata'],
-    why: 'Investigations cannot prove database-level changes without audit evidence.',
-    nextAction: 'Create a read-only audit user and test access without storing raw secrets.',
-    cta: 'Copy SQL grant',
-    setup: ['Create read-only audit role', 'Store credential reference', 'Run access test'],
-    verification: ['audit source reachable', 'role metadata visible', 'query evidence cited'],
-    snippet:
-      'CREATE ROLE controlone_audit LOGIN;\nGRANT pg_read_all_stats TO controlone_audit;\nGRANT SELECT ON pg_catalog.pg_authid TO controlone_audit;',
-  },
-  {
-    id: 'svc-redis',
-    name: 'Redis cache',
-    kind: 'cache',
-    state: 'detected_only',
-    evidence: ['process inventory', 'port 6379'],
-    missing: ['slowlog collection', 'parser pack'],
-    why: 'Latency incidents will be inferred from side channels until slowlog evidence is enabled.',
-    nextAction: 'Enable slowlog collection or mark Redis not applicable for this tenant.',
-    cta: 'Show slowlog command',
-    setup: ['Enable slowlog threshold', 'Register log path', 'Verify parser pack'],
-    verification: ['slowlog event appears', 'parser state normalized', 'AI citation uses Redis source'],
-    snippet: 'CONFIG SET slowlog-log-slower-than 10000\nSLOWLOG GET 128',
-  },
-  {
-    id: 'svc-celery',
-    name: 'Celery worker',
-    kind: 'worker',
-    state: 'raw_only',
-    evidence: ['raw log path'],
-    missing: ['typed parser', 'task correlation'],
-    why: 'Worker failures can be searched, but Control One cannot yet group task IDs into cases.',
-    nextAction: 'Attach parser pack or route raw-only status into the investigation limitation.',
-    cta: 'Open parser gap',
-    setup: ['Confirm log format', 'Map task ID field', 'Register parser version'],
-    verification: ['task ID normalized', 'retry count visible', 'case evidence linked'],
-  },
-  {
-    id: 'svc-legacy',
-    name: 'Legacy SOAP gateway',
-    kind: 'custom app',
-    state: 'unsupported',
-    evidence: ['node inventory'],
-    missing: ['supported parser', 'instrumentation package'],
-    why: 'Unsupported sources must stay visible but cannot count as healthy coverage.',
-    nextAction: 'Request a custom connector contract from ai-logfixer or mark not applicable.',
-    cta: 'Open adapter tracker',
-    setup: ['Capture sample transcript', 'Define redaction expectations', 'Create fixture contract'],
-    verification: ['fixture passes contract', 'state no longer unsupported', 'operator copy updated'],
-  },
-];
-
-const REFERENCE_ACTIONS: ActionItem[] = [
-  {
-    id: 'postgres-audit',
-    title: 'Create PostgreSQL read-only audit user',
-    impact: 'Unlocks DB-level AI citations, compliance evidence, and case exports.',
-    serviceId: 'svc-postgres',
-    effort: 'Medium',
-    risk: 'warning',
-  },
-  {
-    id: 'fastapi-middleware',
-    title: 'Add FastAPI instrumentation middleware',
-    impact: 'Adds stack traces and request-span evidence to incident timelines.',
-    serviceId: 'svc-fastapi',
-    effort: 'Low',
-    risk: 'info',
-  },
-  {
-    id: 'redis-slowlog',
-    title: 'Enable Redis slowlog collection',
-    impact: 'Turns cache latency from inferred side-channel signal into cited evidence.',
-    serviceId: 'svc-redis',
-    effort: 'Low',
-    risk: 'info',
-  },
-  {
-    id: 'legacy-contract',
-    title: 'Create custom connector fixture',
-    impact: 'Moves the SOAP gateway from unsupported to contract-reviewed.',
-    serviceId: 'svc-legacy',
-    effort: 'High',
-    risk: 'degraded',
-  },
-];
-
-const REFERENCE_KNOWLEDGE_CHUNKS: KnowledgeChunk[] = [
-  {
-    id: 'kt-postgres-audit-001',
-    source: 'PostgreSQL core',
-    topic: 'DB audit gap',
-    state: 'fresh',
-    summary: 'Port and process evidence confirm PostgreSQL, but audit log access is missing.',
-    citations: ['coverage:db_audit:postgres', 'db_audit_discovery:postgres-core'],
-    openedFrom: ['Ask AI', 'Timeline', 'Case'],
-  },
-  {
-    id: 'kt-fastapi-trace-007',
-    source: 'Example FastAPI service',
-    topic: 'Instrumentation fallback',
-    state: 'stale',
-    summary: 'Application logs are present; middleware verification has not refreshed after the latest deploy.',
-    citations: ['events:fastapi:error-rate', 'coverage:parser:fastapi'],
-    openedFrom: ['Ask AI', 'Timeline'],
-  },
-  {
-    id: 'kt-celery-parser-003',
-    source: 'Celery worker',
-    topic: 'Raw-only parser state',
-    state: 'failed',
-    summary: 'Chunk job retained the raw source but skipped summary generation because the sample was low signal.',
-    citations: ['raw_logs:celery:task-retry', 'knowledge_job:celery-parser'],
-    openedFrom: ['Case'],
-  },
-];
-
 const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; plain: string }> = {
   healthy: {
-    label: 'Healthy',
+    label: 'Ready',
     tone: 'healthy',
-    plain: 'Control One can cite this source in investigations.',
+    plain: 'Collection and citation evidence are ready. This is not application health.',
   },
   partial: {
     label: 'Partial',
     tone: 'warning',
-    plain: 'Some evidence is usable, but a stronger signal is missing.',
+    plain: 'Evidence exists, but collection or parser readiness is incomplete.',
   },
   needs_access: {
-    label: 'Needs access',
+    label: 'Needs approval',
     tone: 'warning',
-    plain: 'The service was found, but audit access is missing.',
+    plain: 'Collection is blocked until the required approval or policy grant exists.',
   },
   fallback_active: {
     label: 'Fallback active',
@@ -264,7 +109,7 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
   detected_only: {
     label: 'Detected only',
     tone: 'info',
-    plain: 'Inventory found the service before telemetry was enabled.',
+    plain: 'The source or setup is known, but verified event flow is not proven.',
   },
   raw_only: {
     label: 'Raw only',
@@ -274,22 +119,28 @@ const STATE_META: Record<ObservabilityState, { label: string; tone: StateTone; p
   unsupported: {
     label: 'Unsupported',
     tone: 'critical',
-    plain: 'This cannot count as healthy coverage.',
+    plain: 'No supported first-party collection or parsing path exists.',
+  },
+  policy_blocked: {
+    label: 'Policy blocked',
+    tone: 'warning',
+    plain: 'Collection is intentionally blocked by privacy, sensitivity, or policy.',
   },
   stale: {
-    label: 'Stale',
+    label: 'Stale data',
     tone: 'degraded',
-    plain: 'The last verification is outside the freshness window.',
+    plain: 'Observability evidence has not refreshed. This does not mean the service is down.',
   },
   failed: {
     label: 'Failed',
     tone: 'critical',
-    plain: 'The last verification job failed.',
+    plain: 'Collection or parser verification reported a failure.',
   },
 };
 
 const CHUNK_TONE: Record<KnowledgeChunk['state'], StateTone> = {
   fresh: 'healthy',
+  attention: 'warning',
   stale: 'degraded',
   failed: 'critical',
 };
@@ -323,11 +174,6 @@ export function Observability(): JSX.Element {
 
   const tenantId = currentTenantId ?? undefined;
   const tenantLabel = currentTenant?.name ?? 'Current tenant';
-  const {
-    data: nodes,
-    loading: nodesLoading,
-    error: nodesError,
-  } = useNodes({ tenantId, limit: 200, offset: 0 });
   const coverage = useCoverageMatrix({ tenantId, enabled: Boolean(tenantId) });
 
   useEffect(() => {
@@ -378,36 +224,27 @@ export function Observability(): JSX.Element {
   const liveServices = useMemo(
     () =>
       buildLiveObservabilityServices({
-        nodes,
         webservers: liveState.webservers,
         sourceHealth: liveState.sourceHealth,
         coverageRows: coverage.data?.rows ?? [],
       }),
-    [coverage.data?.rows, liveState.sourceHealth, liveState.webservers, nodes],
+    [coverage.data?.rows, liveState.sourceHealth, liveState.webservers],
   );
-  const referenceMode = liveServices.length === 0;
-  const services = referenceMode ? REFERENCE_SERVICES : liveServices;
-  const selected = services.find((service) => service.id === selectedId) ?? services[0];
-  const actions = useMemo(
-    () => (referenceMode ? REFERENCE_ACTIONS : deriveActions(services)),
-    [referenceMode, services],
-  );
+  const services = liveServices;
+  const selected = services.find((service) => service.id === selectedId) ?? services[0] ?? null;
+  const actions = useMemo(() => deriveActions(services), [services]);
   const knowledgeChunks = useMemo(
-    () =>
-      referenceMode
-        ? REFERENCE_KNOWLEDGE_CHUNKS
-        : deriveKnowledgeChunks(services, coverage.data?.rows ?? []),
-    [coverage.data?.rows, referenceMode, services],
+    () => deriveKnowledgeChunks(services, coverage.data?.rows ?? []),
+    [coverage.data?.rows, services],
   );
   const selectedChunk =
-    knowledgeChunks.find((chunk) => chunk.id === selectedChunkId) ?? knowledgeChunks[0];
-  const summary = useMemo(() => summarizeServices(services), [services]);
+    knowledgeChunks.find((chunk) => chunk.id === selectedChunkId) ?? knowledgeChunks[0] ?? null;
   const dbService =
     services.find((service) => /db|postgres|mysql|mssql|database/i.test(`${service.kind} ${service.name}`)) ??
     services.find((service) => service.state === 'needs_access') ??
     selected;
-  const loading = nodesLoading || liveState.loading || coverage.loading;
-  const loadErrors = [nodesError, liveState.error, coverage.error].filter(Boolean);
+  const loading = liveState.loading || coverage.loading;
+  const loadErrors = [liveState.error, coverage.error].filter(Boolean);
   const debugReady = Boolean(
     debug.scope.trim() &&
       Number(debug.ttl) > 0 &&
@@ -442,12 +279,12 @@ export function Observability(): JSX.Element {
     <div className="flex flex-col gap-5">
       <SectionHeader
         eyebrow="OBSERVABILITY"
-        title="Guided setup"
-        description={`${tenantLabel} connector, instrumentation, debug, and knowledge states translated into operator decisions.`}
+        title="Observability"
+        description={`${tenantLabel} service inventory and telemetry coverage.`}
         actions={
           <div className="flex flex-wrap gap-2">
-            <StatusTag tone={referenceMode ? 'warning' : 'healthy'}>
-              {referenceMode ? 'reference' : 'live data'}
+            <StatusTag tone={tenantId ? 'healthy' : 'warning'}>
+              {tenantId ? 'live data' : 'select tenant'}
             </StatusTag>
             {loading ? <StatusTag tone="info">loading</StatusTag> : null}
             <Button asChild variant="outline" size="sm">
@@ -473,17 +310,12 @@ export function Observability(): JSX.Element {
         </Panel>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <KpiTile label="Detected services" value={summary.total.toString()} tone="info" icon={<Network />} />
-        <KpiTile label="Healthy" value={summary.healthy.toString()} tone="healthy" icon={<ShieldCheck />} />
-        <KpiTile label="Partial" value={summary.partial.toString()} tone="warning" icon={<AlertTriangle />} />
-        <KpiTile label="Needs access" value={summary.needsAccess.toString()} tone="degraded" icon={<KeyRound />} />
-        <KpiTile label="Unsupported" value={summary.unsupported.toString()} tone="critical" icon={<Terminal />} />
-      </div>
+      <ServiceInventory tenantId={tenantId} tenantLabel={tenantLabel} />
       <NetworkObservabilityPanel key={tenantId ?? 'all'} tenantId={tenantId} />
-
+      {services.length > 0 && selected && dbService && selectedChunk ? (
+        <>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
-        <Panel padding="md" eyebrow="STACK MAP" title={referenceMode ? 'Reference blueprint' : `${tenantLabel} live stack`}>
+        <Panel padding="md" eyebrow="COVERAGE SOURCES" title={`${tenantLabel} source setup snapshot`}>
           <div className="overflow-x-auto rounded-lg border border-border-subtle">
             <table className="w-full min-w-[640px] table-fixed text-sm xl:min-w-0">
               <colgroup>
@@ -495,7 +327,7 @@ export function Observability(): JSX.Element {
               </colgroup>
               <thead className="bg-surface-2 text-left text-xs uppercase tracking-wide text-text-secondary">
                 <tr>
-                  <th className="px-3 py-2">Service</th>
+                  <th className="px-3 py-2">Source / coverage</th>
                   <th className="px-3 py-2">State</th>
                   <th className="px-3 py-2">Evidence</th>
                   <th className="px-3 py-2">Next action</th>
@@ -690,17 +522,23 @@ export function Observability(): JSX.Element {
           </div>
         </Panel>
       </div>
+        </>
+      ) : (
+        <Panel padding="md" eyebrow="COVERAGE SOURCES" title="No observability sources reported">
+          <p className="text-sm text-text-secondary">
+            Service discovery is listed above. Telemetry source readiness will appear here after collectors or coverage sources report.
+          </p>
+        </Panel>
+      )}
     </div>
   );
 }
 
 function buildLiveObservabilityServices({
-  nodes,
   webservers,
   sourceHealth,
   coverageRows,
 }: {
-  nodes: NodeSummary[];
   webservers: WebserverInstance[];
   sourceHealth: ContentPackSourceHealth[];
   coverageRows: CoverageMatrixRow[];
@@ -709,24 +547,18 @@ function buildLiveObservabilityServices({
   const safeWebservers = Array.isArray(webservers) ? webservers : [];
   const safeSourceHealth = Array.isArray(sourceHealth) ? sourceHealth : [];
   const safeCoverageRows = Array.isArray(coverageRows) ? coverageRows : [];
-  const safeNodes = Array.isArray(nodes) ? nodes : [];
 
-  services.push(...safeWebservers.slice(0, 8).map(serviceFromWebserver));
-  services.push(...safeSourceHealth.slice(0, 10).map(serviceFromSourceHealth));
+  services.push(...safeWebservers.map(serviceFromWebserver));
+  services.push(...safeSourceHealth.map(serviceFromSourceHealth));
 
   const attentionRows = safeCoverageRows
     .filter((row) => isAttentionCoverageState(row.coverage_state ?? row.state))
-    .slice(0, 8)
     .map(serviceFromCoverageRow);
   services.push(...attentionRows);
 
-  const nodeRows = safeNodes
-    .slice(0, 6)
-    .map(serviceFromNode)
-    .filter((service) => !services.some((candidate) => candidate.id === service.id));
-  services.push(...nodeRows);
-
-  return dedupeServices(services).slice(0, 24);
+  return dedupeServices(services)
+    .sort((left, right) => sourceStatePriority(left.state) - sourceStatePriority(right.state))
+    .slice(0, 24);
 }
 
 function serviceFromWebserver(instance: WebserverInstance): ObservabilityService {
@@ -734,12 +566,13 @@ function serviceFromWebserver(instance: WebserverInstance): ObservabilityService
   const vhostCount = Array.isArray(instance.VHosts) ? instance.VHosts.length : 0;
   const hasAccess = Boolean(instance.AccessLogPath);
   const hasError = Boolean(instance.ErrorLogPath);
-  const state: ObservabilityState = hasAccess && hasError ? 'healthy' : 'partial';
+  // A discovered log path proves configuration, not that events are flowing.
+  const state: ObservabilityState = hasAccess && hasError ? 'partial' : 'detected_only';
 
   return {
     id: `webserver:${instance.ID}`,
     name,
-    kind: 'webserver',
+    kind: 'webserver setup',
     state,
     evidence: compact([
       versionEvidence(instance.Version),
@@ -749,18 +582,22 @@ function serviceFromWebserver(instance: WebserverInstance): ObservabilityService
       vhostCount ? `${vhostCount} vhosts` : '',
       instance.ObservedAt ? `observed ${formatDateLabel(instance.ObservedAt)}` : '',
     ]),
-    missing: compact([!hasAccess ? 'access log path' : '', !hasError ? 'error log path' : '']),
+    missing: compact([
+      !hasAccess ? 'access log path' : '',
+      !hasError ? 'error log path' : '',
+      hasAccess && hasError ? 'event flow verification' : '',
+    ]),
     why:
-      state === 'healthy'
-        ? 'Webserver inventory includes config and log paths that can back investigations and receipts.'
-        : 'Webserver inventory exists, but capture evidence is not complete enough for full citation coverage.',
+      hasAccess && hasError
+        ? 'Webserver config and log paths are discovered, but event flow and parser health still require runtime verification.'
+        : 'Webserver inventory exists, but one or more log paths required for collection are missing.',
     nextAction:
-      state === 'healthy'
-        ? 'Keep parser version, vhost, and retention evidence fresh.'
+      hasAccess && hasError
+        ? 'Verify log collection and parser health for this webserver.'
         : 'Run capture setup for missing webserver log paths.',
     cta: 'Open webserver controls',
-    setup: ['Review discovered config', 'Confirm managed capture policy', 'Keep parser evidence fresh'],
-    verification: ['inventory current', 'log path cited', 'receipt path linked'],
+    setup: ['Review discovered config', 'Confirm managed capture policy', 'Verify runtime collection'],
+    verification: ['inventory current', 'events arriving', 'parser health proven'],
     href: '/security/webservers',
   };
 }
@@ -845,31 +682,6 @@ function serviceFromCoverageRow(row: CoverageMatrixRow): ObservabilityService {
   };
 }
 
-function serviceFromNode(node: NodeSummary): ObservabilityService {
-  const fresh = isFresh(node.last_seen_at);
-  return {
-    id: `node:${node.id}`,
-    name: node.hostname || shortId(node.id),
-    kind: 'node agent',
-    state: fresh ? 'healthy' : 'stale',
-    evidence: compact([
-      node.os,
-      node.agent_version ? `agent ${node.agent_version}` : '',
-      node.public_ip,
-      node.last_seen_at ? `last seen ${formatDateLabel(node.last_seen_at)}` : '',
-    ]),
-    missing: fresh ? [] : ['fresh heartbeat'],
-    why: fresh
-      ? 'Node agent is reporting current inventory and can anchor observability evidence.'
-      : 'Node agent heartbeat is outside the freshness window for live observability proof.',
-    nextAction: fresh ? 'Keep node telemetry policy current.' : 'Repair or re-enroll the stale node agent.',
-    cta: 'Open node',
-    setup: ['Confirm agent service', 'Review telemetry profile', 'Check source labels'],
-    verification: ['heartbeat current', 'services discovered', 'coverage rows linked'],
-    href: `/nodes/${node.id}`,
-  };
-}
-
 function deriveActions(services: ObservabilityService[]): ActionItem[] {
   const attention = services.filter((service) => service.state !== 'healthy').slice(0, 6);
   if (attention.length === 0 && services.length > 0) {
@@ -920,7 +732,7 @@ function deriveKnowledgeChunks(
       id: `chunk:coverage:${row.domain}:${sanitizeKey(row.title || row.name || row.subject || 'row')}`,
       source: row.title || row.name || row.subject || String(row.domain || 'coverage'),
       topic: 'Coverage gap',
-      state: 'stale' as const,
+      state: chunkStateForService(stateFromCoverage(row.coverage_state ?? row.state)),
       summary: row.reason || row.details || row.description || 'Coverage matrix row needs attention.',
       citations: compact([`coverage:${row.domain}`, ...(row.evidence ?? []).slice(0, 2), ...(row.gaps ?? []).slice(0, 1)]),
       openedFrom: ['Coverage', 'Ask AI'],
@@ -955,26 +767,32 @@ function stateFromSourceHealth(state: string | undefined): ObservabilityState {
   switch ((state ?? '').toLowerCase()) {
     case 'healthy':
     case 'parser_healthy':
-    case 'collecting':
-    case 'deployed':
       return 'healthy';
+    case 'collecting':
+      return 'partial';
     case 'raw_only':
       return 'raw_only';
     case 'parser_failed':
     case 'failed':
-    case 'collection_conflict':
       return 'failed';
+    case 'collection_conflict':
+      return 'partial';
     case 'silent':
     case 'stale':
-    case 'backpressured':
       return 'stale';
+    case 'backpressured':
+      return 'partial';
     case 'approval_required':
-    case 'approved':
-    case 'proposed':
       return 'needs_access';
     case 'unsupported':
-    case 'privacy_blocked':
       return 'unsupported';
+    case 'privacy_blocked':
+      return 'policy_blocked';
+    case 'proposed':
+    case 'approved':
+    case 'config_rendered':
+    case 'deployed':
+    case 'discovered':
     default:
       return 'detected_only';
   }
@@ -1015,6 +833,22 @@ function isAttentionCoverageState(state: string | undefined): boolean {
   );
 }
 
+function sourceStatePriority(state: ObservabilityState): number {
+  const priority: Record<ObservabilityState, number> = {
+    failed: 0,
+    unsupported: 1,
+    policy_blocked: 2,
+    needs_access: 3,
+    stale: 4,
+    partial: 5,
+    raw_only: 6,
+    detected_only: 7,
+    fallback_active: 8,
+    healthy: 9,
+  };
+  return priority[state];
+}
+
 function actionForState(state: ObservabilityState, name: string): string {
   switch (state) {
     case 'needs_access':
@@ -1023,6 +857,8 @@ function actionForState(state: ObservabilityState, name: string): string {
       return `Attach parser coverage for ${name}`;
     case 'unsupported':
       return `Create connector contract for ${name}`;
+    case 'policy_blocked':
+      return `Review collection policy for ${name}`;
     case 'stale':
       return `Refresh stale observability evidence for ${name}`;
     case 'failed':
@@ -1043,21 +879,15 @@ function firstRecommendedAction(item: ContentPackSourceHealth): string | undefin
 
 function effortForState(state: ObservabilityState): string {
   if (state === 'unsupported' || state === 'failed') return 'High';
-  if (state === 'needs_access' || state === 'stale') return 'Medium';
+  if (state === 'needs_access' || state === 'policy_blocked' || state === 'stale') return 'Medium';
   return 'Low';
 }
 
 function chunkStateForService(state: ObservabilityState): KnowledgeChunk['state'] {
   if (state === 'healthy') return 'fresh';
-  if (state === 'failed' || state === 'unsupported') return 'failed';
-  return 'stale';
-}
-
-function isFresh(value?: string, hours = 24): boolean {
-  if (!value) return false;
-  const ts = Date.parse(value);
-  if (!Number.isFinite(ts)) return false;
-  return Date.now() - ts <= hours * 60 * 60 * 1000;
+  if (state === 'stale') return 'stale';
+  if (state === 'failed') return 'failed';
+  return 'attention';
 }
 
 function formatDateLabel(value: string): string {
@@ -1068,10 +898,6 @@ function formatDateLabel(value: string): string {
 
 function compact(values: Array<string | null | undefined | false>): string[] {
   return values.map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean);
-}
-
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id;
 }
 
 function sanitizeKey(value: string): string {
@@ -1270,20 +1096,6 @@ function DebugInput({
         className="h-9 rounded-md border border-border-subtle bg-surface px-3 text-sm text-foreground"
       />
     </label>
-  );
-}
-
-function summarizeServices(services: ObservabilityService[]) {
-  return services.reduce(
-    (acc, service) => {
-      acc.total += 1;
-      if (service.state === 'healthy') acc.healthy += 1;
-      if (service.state === 'partial' || service.state === 'raw_only' || service.state === 'detected_only') acc.partial += 1;
-      if (service.state === 'needs_access') acc.needsAccess += 1;
-      if (service.state === 'unsupported') acc.unsupported += 1;
-      return acc;
-    },
-    { total: 0, healthy: 0, partial: 0, needsAccess: 0, unsupported: 0 },
   );
 }
 

@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, EmptyState, KpiTile, Panel, SectionHeader, StatusTag, type StateTone } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
+import { AllTenantWebserverSummary } from '@/features/webserver-controls/AllTenantWebserverSummary';
 import type { WebserverConfigActionHistory, WebserverConfigReceipt, WebserverInstance } from '../lib/api';
 
 type WebserverActionMode = 'plan' | 'capture' | 'enforce' | 'rollback';
@@ -168,7 +169,7 @@ export function WebserverAutoControl(): JSX.Element {
   const cancelPendingAction = () => setPendingAction(null);
 
   if (!currentTenantId) {
-    return <EmptyState title="Select a tenant" description="Choose a tenant to view webserver controls." />;
+    return <AllTenantWebserverSummary />;
   }
 
   const pendingKey = pendingAction ? webserverActionKey(pendingAction.instance, pendingAction.mode) : '';

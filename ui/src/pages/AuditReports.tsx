@@ -11,8 +11,8 @@ import {
   type StateTone,
 } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
-import { useTenants } from '../hooks/useTenants';
 import { useTenant } from '../providers/TenantProvider';
+import { AllTenantAuditReportSummary } from '@/features/audit-reports/AllTenantAuditReportSummary';
 import { saveBlob } from '../lib/download';
 import type { AuditReport } from '../lib/api';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -51,11 +51,28 @@ function isReportReady(report: AuditReport): boolean {
 }
 
 export function AuditReports(): JSX.Element {
-  const client = useApiClient();
-  const { data: tenantList } = useTenants();
-  const { currentTenantId } = useTenant();
+  const { currentTenantId, currentTenant } = useTenant();
 
-  const [selectedTenant, setSelectedTenant] = useState<string>('');
+  if (!currentTenantId) {
+    return <AllTenantAuditReportSummary />;
+  }
+
+  return (
+    <TenantAuditReports
+      tenantId={currentTenantId}
+      tenantName={currentTenant?.name}
+    />
+  );
+}
+
+function TenantAuditReports({
+  tenantId,
+  tenantName,
+}: {
+  tenantId: string;
+  tenantName?: string;
+}): JSX.Element {
+  const client = useApiClient();
   const [reports, setReports] = useState<AuditReport[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -71,10 +88,9 @@ export function AuditReports(): JSX.Element {
   });
 
   const load = useCallback(async () => {
-    if (!selectedTenant) return;
     setLoading(true);
     try {
-      const res = await client.listAuditReports({ tenantId: selectedTenant, limit: 50 });
+      const res = await client.listAuditReports({ tenantId, limit: 50 });
       setReports(res.data);
       setLoadError(null);
     } catch (err: unknown) {
@@ -83,27 +99,11 @@ export function AuditReports(): JSX.Element {
     } finally {
       setLoading(false);
     }
-  }, [client, selectedTenant]);
+  }, [client, tenantId]);
 
   useEffect(() => {
     void load();
   }, [load]);
-
-  // Auto-select the active tenant when the shared tenant scope is available.
-  useEffect(() => {
-    if (selectedTenant || tenantList.length === 0) return;
-    const activeTenant = currentTenantId
-      ? tenantList.find((tenant) => tenant.id === currentTenantId)
-      : undefined;
-    setSelectedTenant((activeTenant ?? tenantList[0]).id);
-  }, [currentTenantId, tenantList, selectedTenant]);
-
-  useEffect(() => {
-    if (!selectedTenant || tenantList.length === 0) return;
-    if (!tenantList.some((tenant) => tenant.id === selectedTenant)) {
-      setSelectedTenant('');
-    }
-  }, [tenantList, selectedTenant]);
 
   // Auto-refresh every 10 seconds to pick up status changes
   useEffect(() => {
@@ -114,7 +114,7 @@ export function AuditReports(): JSX.Element {
   }, [load]);
 
   const handleGenerate = async () => {
-    if (!selectedTenant || !genForm.period_start || !genForm.period_end) {
+    if (!genForm.period_start || !genForm.period_end) {
       setGenError('All fields are required.');
       return;
     }
@@ -126,7 +126,7 @@ export function AuditReports(): JSX.Element {
     setGenError(null);
     try {
       await client.createAuditReport({
-        tenant_id: selectedTenant,
+        tenant_id: tenantId,
         framework: genForm.framework,
         period_start: genForm.period_start,
         period_end: genForm.period_end,
@@ -140,11 +140,10 @@ export function AuditReports(): JSX.Element {
   };
 
   const handleDownload = async (report: AuditReport) => {
-    if (!selectedTenant) return;
     setDownloadingId(report.id);
     setDownloadError(null);
     try {
-      const file = await client.downloadAuditReport(report.id, selectedTenant);
+      const file = await client.downloadAuditReport(report.id, tenantId);
       saveBlob(file.blob, file.filename || fallbackReportFilename(report));
     } catch (err: unknown) {
       setDownloadError(errorMessage(err, 'Failed to download report'));
@@ -205,30 +204,16 @@ export function AuditReports(): JSX.Element {
   return (
     <div className="flex flex-col gap-4">
       <SectionHeader
+        eyebrow={tenantName}
         title="Audit Reports"
         description="Generate and download compliance audit reports."
+        actions={
+          <Button variant="outline" size="sm" onClick={() => void load()} loading={loading}>
+            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
+            {loading ? 'Refreshing…' : 'Refresh'}
+          </Button>
+        }
       />
-
-      <div className="flex flex-wrap gap-3 items-center">
-        <select
-          id="audit-report-tenant"
-          aria-label="Report tenant"
-          className="border rounded px-3 py-1.5 text-sm bg-background"
-          value={selectedTenant}
-          onChange={(e) => setSelectedTenant(e.target.value)}
-        >
-          <option value="">Select tenant...</option>
-          {tenantList.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-        <Button variant="outline" size="sm" onClick={() => void load()} disabled={!selectedTenant} loading={loading}>
-          <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
-          {loading ? 'Refreshing…' : 'Refresh'}
-        </Button>
-      </div>
       {loadError && (
         <Alert
           variant="critical"
@@ -321,7 +306,7 @@ export function AuditReports(): JSX.Element {
             <Button
               size="sm"
               onClick={() => void handleGenerate()}
-              disabled={generating || !selectedTenant}
+              disabled={generating}
             >
               {generating ? 'Creating...' : 'Generate report'}
             </Button>

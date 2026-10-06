@@ -852,17 +852,30 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tenantParam := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
-	if tenantParam == "" {
-		http.Error(w, "tenant_id query parameter is required", http.StatusBadRequest)
-		return
-	}
-	tenantID, err := uuid.Parse(tenantParam)
-	if err != nil {
-		http.Error(w, "invalid tenant_id", http.StatusBadRequest)
-		return
-	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
-		return
+	var tenantID uuid.UUID
+	var tenantIDs []uuid.UUID
+	if tenantParam != "" {
+		tenantID, err = uuid.Parse(tenantParam)
+		if err != nil {
+			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+			return
+		}
+	} else {
+		tenantIDs, err = s.accessibleTenantIDs(r.Context(), principal, roleViewer, roleOperator, roleAdmin)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		if len(tenantIDs) == 0 {
+			writeJSON(w, http.StatusOK, paginatedResponse[jobResponse]{
+				Data:       []jobResponse{},
+				Pagination: newPaginationMeta(0, limit, offset, 0),
+			})
+			return
+		}
 	}
 
 	jobType := strings.TrimSpace(r.URL.Query().Get("type"))
@@ -877,7 +890,18 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 		status = candidate
 	}
 
-	jobs, total, err := s.store.ListJobs(r.Context(), tenantID, jobType, status, limit, offset)
+	var jobs []storage.Job
+	var total int
+	if tenantID != uuid.Nil {
+		jobs, total, err = s.store.ListJobs(r.Context(), tenantID, jobType, status, limit, offset)
+	} else if scopedStore, ok := s.store.(interface {
+		ListJobsForTenants(context.Context, []uuid.UUID, string, storage.JobStatus, int, int) ([]storage.Job, int, error)
+	}); ok {
+		jobs, total, err = scopedStore.ListJobsForTenants(r.Context(), tenantIDs, jobType, status, limit, offset)
+	} else {
+		http.Error(w, "tenant-scoped job store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		s.logger.Error("list jobs", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

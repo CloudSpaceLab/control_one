@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 )
 
 // PatchDeployment is one operator-initiated patch run. It fans out to N
@@ -33,6 +34,174 @@ type PatchDeployment struct {
 
 // NodePatchState is the per-node row created when a deployment fans out.
 // Status moves pending → applied | failed as the agent reports back.
+type PatchDeploymentSummary struct {
+	Total            int `json:"total"`
+	Pending          int `json:"pending"`
+	InProgress       int `json:"in_progress"`
+	Completed        int `json:"completed"`
+	Partial          int `json:"partial"`
+	Failed           int `json:"failed"`
+	PendingApprovals int `json:"pending_approvals"`
+	ExpiredApprovals int `json:"expired_approvals"`
+
+	ActiveNodes         int `json:"active_nodes"`
+	InventoryNodes      int `json:"inventory_nodes"`
+	FreshInventoryNodes int `json:"fresh_inventory_nodes"`
+	DirectNodes         int `json:"direct_nodes"`
+	ProxyNodes          int `json:"proxy_nodes"`
+	AirgappedNodes      int `json:"airgapped_nodes"`
+
+	KnownAffectedNodes     int `json:"known_affected_nodes"`
+	KnownActiveFindings    int `json:"known_active_findings"`
+	KnownCriticalFindings  int `json:"known_critical_findings"`
+	KnownHighFindings      int `json:"known_high_findings"`
+	KnownKEVFindings       int `json:"known_kev_findings"`
+	KnownPatchableFindings int `json:"known_patchable_findings"`
+
+	WindowsScheduled int `json:"windows_scheduled"`
+	WindowsOpen      int `json:"windows_open"`
+	WindowsClosing   int `json:"windows_closing"`
+	ProxiesHealthy   int `json:"proxies_healthy"`
+	ProxiesDegraded  int `json:"proxies_degraded"`
+}
+
+func (s *Store) GetPatchDeploymentSummary(ctx context.Context, tenantIDs []uuid.UUID) (PatchDeploymentSummary, error) {
+	var out PatchDeploymentSummary
+	if s.db == nil {
+		return out, errors.New("store database not initialized")
+	}
+	values := make([]string, 0, len(tenantIDs))
+	for _, tenantID := range tenantIDs {
+		if tenantID != uuid.Nil {
+			values = append(values, tenantID.String())
+		}
+	}
+	if len(values) == 0 {
+		return out, nil
+	}
+
+	tenantArray := pq.Array(values)
+	if err := s.db.QueryRowContext(ctx, `
+		WITH active_nodes AS (
+			SELECT id, tenant_id
+			FROM nodes
+			WHERE tenant_id = ANY($1::uuid[])
+			  AND state = 'active'
+		),
+		node_posture AS (
+			SELECT
+				COUNT(*)::int AS active_nodes,
+				COUNT(i.node_id)::int AS inventory_nodes,
+				COUNT(i.node_id) FILTER (
+					WHERE i.last_seen_at >= NOW() - INTERVAL '24 hours'
+				)::int AS fresh_inventory_nodes,
+				COUNT(*) FILTER (WHERE COALESCE(c.mode, 'direct') = 'direct')::int AS direct_nodes,
+				COUNT(*) FILTER (WHERE c.mode = 'proxy')::int AS proxy_nodes,
+				COUNT(*) FILTER (WHERE c.mode = 'airgapped')::int AS airgapped_nodes
+			FROM active_nodes n
+			LEFT JOIN node_inventory_sync i ON i.node_id = n.id
+			LEFT JOIN node_patch_config c ON c.node_id = n.id
+		),
+		vulnerability_posture AS (
+			SELECT
+				COUNT(DISTINCT f.node_id)::int AS affected_nodes,
+				COUNT(*)::int AS active_findings,
+				COUNT(*) FILTER (WHERE LOWER(f.severity) = 'critical')::int AS critical_findings,
+				COUNT(*) FILTER (WHERE LOWER(f.severity) = 'high')::int AS high_findings,
+				COUNT(*) FILTER (WHERE f.kev)::int AS kev_findings,
+				COUNT(*) FILTER (
+					WHERE NULLIF(BTRIM(COALESCE(f.fixed_version, '')), '') IS NOT NULL
+				)::int AS patchable_findings
+			FROM node_vulnerability_findings f
+			JOIN active_nodes n ON n.id = f.node_id
+			WHERE f.tenant_id = ANY($1::uuid[])
+			  AND f.resolved_at IS NULL
+		),
+		deployment_posture AS (
+			SELECT
+				COUNT(*)::int AS total,
+				COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
+				COUNT(*) FILTER (WHERE status = 'in_progress')::int AS in_progress,
+				COUNT(*) FILTER (WHERE status = 'completed')::int AS completed,
+				COUNT(*) FILTER (WHERE status = 'partial')::int AS partial,
+				COUNT(*) FILTER (WHERE status = 'failed')::int AS failed
+			FROM patch_deployments
+			WHERE tenant_id = ANY($1::uuid[])
+		),
+		approval_posture AS (
+			SELECT
+				COUNT(*) FILTER (
+					WHERE status = 'pending' AND expires_at > NOW()
+				)::int AS pending,
+				COUNT(*) FILTER (
+					WHERE status = 'expired'
+					   OR (status = 'pending' AND expires_at <= NOW())
+				)::int AS expired
+			FROM patch_approvals
+			WHERE tenant_id = ANY($1::uuid[])
+		),
+		window_posture AS (
+			SELECT
+				COUNT(*) FILTER (WHERE status = 'scheduled')::int AS scheduled,
+				COUNT(*) FILTER (WHERE status = 'open')::int AS open,
+				COUNT(*) FILTER (WHERE status = 'closing')::int AS closing
+			FROM maintenance_windows
+			WHERE tenant_id = ANY($1::uuid[])
+		),
+		proxy_posture AS (
+			SELECT
+				COUNT(*) FILTER (WHERE status = 'healthy')::int AS healthy,
+				COUNT(*) FILTER (WHERE status = 'degraded')::int AS degraded
+			FROM squid_proxies
+			WHERE tenant_id = ANY($1::uuid[])
+		)
+		SELECT
+			d.total, d.pending, d.in_progress, d.completed, d.partial, d.failed,
+			a.pending, a.expired,
+			n.active_nodes, n.inventory_nodes, n.fresh_inventory_nodes,
+			n.direct_nodes, n.proxy_nodes, n.airgapped_nodes,
+			v.affected_nodes, v.active_findings, v.critical_findings, v.high_findings,
+			v.kev_findings, v.patchable_findings,
+			w.scheduled, w.open, w.closing,
+			p.healthy, p.degraded
+		FROM deployment_posture d
+		CROSS JOIN approval_posture a
+		CROSS JOIN node_posture n
+		CROSS JOIN vulnerability_posture v
+		CROSS JOIN window_posture w
+		CROSS JOIN proxy_posture p
+	`, tenantArray).Scan(
+		&out.Total,
+		&out.Pending,
+		&out.InProgress,
+		&out.Completed,
+		&out.Partial,
+		&out.Failed,
+		&out.PendingApprovals,
+		&out.ExpiredApprovals,
+		&out.ActiveNodes,
+		&out.InventoryNodes,
+		&out.FreshInventoryNodes,
+		&out.DirectNodes,
+		&out.ProxyNodes,
+		&out.AirgappedNodes,
+		&out.KnownAffectedNodes,
+		&out.KnownActiveFindings,
+		&out.KnownCriticalFindings,
+		&out.KnownHighFindings,
+		&out.KnownKEVFindings,
+		&out.KnownPatchableFindings,
+		&out.WindowsScheduled,
+		&out.WindowsOpen,
+		&out.WindowsClosing,
+		&out.ProxiesHealthy,
+		&out.ProxiesDegraded,
+	); err != nil {
+		return out, fmt.Errorf("patch summary: %w", err)
+	}
+	return out, nil
+}
+
 type NodePatchState struct {
 	ID               uuid.UUID
 	DeploymentID     uuid.UUID

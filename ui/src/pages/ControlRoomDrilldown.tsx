@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, ClipboardList, FileText, History, ListChecks, LockKeyhole, RefreshCw, ShieldCheck, WifiOff } from 'lucide-react';
 import { ConfirmModal } from '@/components/ConfirmModal';
@@ -17,6 +17,7 @@ import {
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { describeIPBehaviorFinding } from '../lib/ipBehaviorPresentation';
+import { mapSettledBounded } from '../lib/mapSettledBounded';
 import type {
   ControlRoomAction,
   ControlRoomFirewallNode,
@@ -82,37 +83,91 @@ interface PendingExposureAction extends ExposureActionRequest {
   error?: string;
 }
 
+interface TenantControlRoomOverview {
+  tenantId: string;
+  tenantName: string;
+  overview: ControlRoomOverview;
+}
+
 export function ControlRoomDrilldown(): JSX.Element {
   const { laneId = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const api = useApiClient();
-  const { currentTenantId, currentTenant, loading: tenantLoading } = useTenant();
+  const {
+    currentTenantId,
+    currentTenant,
+    tenants,
+    loading: tenantLoading,
+    setCurrentTenantId,
+  } = useTenant();
   const [period, setPeriod] = useState(params.get('period') || '24h');
   const [overview, setOverview] = useState<ControlRoomOverview | null>(null);
+  const [allTenantOverviews, setAllTenantOverviews] = useState<TenantControlRoomOverview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestId = useRef(0);
 
   const refresh = useCallback(async () => {
+    const nextRequestId = ++requestId.current;
+    setError(null);
+
     if (!currentTenantId) {
       setOverview(null);
-      setError(null);
-      setLoading(tenantLoading);
+      if (tenantLoading) {
+        setLoading(true);
+        return;
+      }
+      if (tenants.length === 0) {
+        setAllTenantOverviews([]);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+      const results = await mapSettledBounded(
+        tenants,
+        async (tenant) => ({
+          tenantId: tenant.id,
+          tenantName: tenant.name,
+          overview: await api.getControlRoomOverview(tenant.id, period),
+        }),
+      );
+      if (nextRequestId !== requestId.current) return;
+
+      const successful = results.flatMap((result) => (
+        result.status === 'fulfilled' ? [result.value] : []
+      ));
+      const failedNames = results.flatMap((result, index) => (
+        result.status === 'rejected' ? [tenants[index]?.name ?? tenants[index]?.id ?? 'Tenant'] : []
+      ));
+      setAllTenantOverviews(successful);
+      if (failedNames.length === results.length) {
+        setError('Detail data unavailable for all tenants.');
+      } else if (failedNames.length > 0) {
+        setError(
+          `${failedNames.length} tenant ${failedNames.length === 1 ? 'detail is' : 'details are'} unavailable: ${failedNames.join(', ')}.`,
+        );
+      }
+      setLoading(false);
       return;
     }
+
+    setAllTenantOverviews([]);
     setLoading(true);
-    setError(null);
     setOverview((current) => (
       current && current.tenant_id === currentTenantId && current.period === period ? current : null
     ));
     try {
       const next = await api.getControlRoomOverview(currentTenantId, period);
+      if (nextRequestId !== requestId.current) return;
       setOverview(next);
     } catch (err) {
+      if (nextRequestId !== requestId.current) return;
       setError(err instanceof Error ? err.message : 'Control Room data unavailable');
     } finally {
-      setLoading(false);
+      if (nextRequestId === requestId.current) setLoading(false);
     }
-  }, [api, currentTenantId, period, tenantLoading]);
+  }, [api, currentTenantId, period, tenantLoading, tenants]);
 
   useEffect(() => {
     const next = new URLSearchParams(params);
@@ -126,6 +181,23 @@ export function ControlRoomDrilldown(): JSX.Element {
   const lane = useMemo(() => overview?.lanes.find((row) => row.id === laneId), [laneId, overview?.lanes]);
   const selectedMetric = params.get('metric') || lane?.primary_metric.label || '';
   const sourceRoute = lane ? SOURCE_ROUTES[lane.id] || lane.drilldown : '/control-room';
+
+  if (!currentTenantId) {
+    return (
+      <AllTenantControlRoomDrilldown
+        laneId={laneId}
+        period={period}
+        loading={loading}
+        error={error}
+        entries={allTenantOverviews}
+        tenantLoading={tenantLoading}
+        tenantCount={tenants.length}
+        onPeriodChange={setPeriod}
+        onRefresh={refresh}
+        onSelectTenant={setCurrentTenantId}
+      />
+    );
+  }
 
   if (!loading && overview && !lane) {
     return <Navigate to="/control-room" replace />;
@@ -271,6 +343,117 @@ export function ControlRoomDrilldown(): JSX.Element {
           </div>
         </>
       ) : null}
+    </div>
+  );
+}
+
+function AllTenantControlRoomDrilldown({
+  laneId,
+  period,
+  loading,
+  error,
+  entries,
+  tenantLoading,
+  tenantCount,
+  onPeriodChange,
+  onRefresh,
+  onSelectTenant,
+}: {
+  laneId: string;
+  period: string;
+  loading: boolean;
+  error: string | null;
+  entries: TenantControlRoomOverview[];
+  tenantLoading: boolean;
+  tenantCount: number;
+  onPeriodChange: (period: string) => void;
+  onRefresh: () => Promise<void>;
+  onSelectTenant: (tenantId: string | null) => void;
+}) {
+  const rows = entries.map((entry) => ({
+    ...entry,
+    lane: entry.overview.lanes.find((candidate) => candidate.id === laneId) ?? null,
+  }));
+  const firstLane = rows.find((row) => row.lane)?.lane;
+  const title = firstLane?.title ?? 'Lane detail';
+
+  return (
+    <div className="flex flex-col gap-5">
+      <SectionHeader
+        eyebrow="CONTROL ROOM DETAIL"
+        title={title}
+        description={`All tenants · ${tenantCount} tenant ${tenantCount === 1 ? 'view' : 'views'} · ${period} window.`}
+        actions={
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <TimeRangePills value={period} options={CONTROL_ROOM_RANGES} onChange={onPeriodChange} />
+            <Button type="button" variant="outline" size="sm" onClick={() => void onRefresh()} loading={loading}>
+              <RefreshCw className={loading ? 'animate-spin' : ''} />
+              {loading ? 'Refreshing…' : 'Refresh'}
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/control-room">
+                <ArrowLeft />
+                Control Room
+              </Link>
+            </Button>
+          </div>
+        }
+      />
+
+      {error ? (
+        <Alert variant={entries.length > 0 ? 'warning' : 'critical'} title={entries.length > 0 ? 'Some tenant detail unavailable' : 'Detail data unavailable'}>
+          {error}
+        </Alert>
+      ) : null}
+
+      {(loading || tenantLoading) && entries.length === 0 ? (
+        <Skeleton className="h-96 rounded-lg" />
+      ) : tenantCount === 0 ? (
+        <EmptyState title="No tenants available" description="No tenant access is available for this account." />
+      ) : rows.length === 0 ? (
+        <EmptyState title="Detail unavailable" description="No tenant detail is available for this lane." />
+      ) : (
+        <Panel
+          eyebrow="TENANTS"
+          title={`${rows.length} of ${tenantCount} tenant ${tenantCount === 1 ? 'view' : 'views'} loaded`}
+          toneAccent={error ? 'warning' : 'brand'}
+        >
+          <div className="grid gap-3 xl:grid-cols-2">
+            {rows.map(({ tenantId, tenantName, lane: tenantLane }) => (
+              <div key={tenantId} className="rounded-lg border border-border-subtle bg-surface p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{tenantName}</p>
+                    <p className="mt-1 text-sm text-text-secondary">
+                      {tenantLane?.summary ?? 'Lane detail unavailable.'}
+                    </p>
+                  </div>
+                  <StatusTag tone={tenantLane ? normalizeTone(tenantLane.tone) : 'unknown'}>
+                    {tenantLane ? `${tenantLane.score}/100` : 'unavailable'}
+                  </StatusTag>
+                </div>
+
+                {tenantLane ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <MetricText label={tenantLane.primary_metric.label} value={tenantLane.primary_metric.value} />
+                    <MetricText label={tenantLane.secondary_metric.label} value={tenantLane.secondary_metric.value} />
+                  </div>
+                ) : null}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => onSelectTenant(tenantId)}
+                >
+                  Open tenant detail
+                </Button>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }

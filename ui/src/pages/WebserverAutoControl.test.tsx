@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => {
     planWebserverConfig,
     applyWebserverConfig,
     rollbackWebserverConfig,
+    currentTenantId: 'tenant-1' as string | null,
+    tenantList: [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }],
+    setCurrentTenantId: vi.fn(),
     apiClient: {
       listWebserverInstances,
       listWebserverConfigActions,
@@ -37,8 +40,15 @@ vi.mock('../hooks/useApiClient', () => ({
 
 vi.mock('../providers/TenantProvider', () => ({
   useTenant: () => ({
-    currentTenantId: 'tenant-1',
-    currentTenant: { id: 'tenant-1', name: 'Bank Tenant' },
+    currentTenantId: mocks.currentTenantId,
+    currentTenant: mocks.currentTenantId
+      ? mocks.tenantList.find((tenant) => tenant.id === mocks.currentTenantId) ?? null
+      : null,
+    tenants: mocks.tenantList,
+    loading: false,
+    error: null,
+    setCurrentTenantId: mocks.setCurrentTenantId,
+    refresh: vi.fn(),
   }),
 }));
 
@@ -75,6 +85,8 @@ function renderWebservers() {
 describe('WebserverAutoControl production hardening', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.currentTenantId = 'tenant-1';
+    mocks.tenantList = [{ id: 'tenant-1', name: 'Bank Tenant', created_at: '2026-01-01T00:00:00Z' }];
     mocks.listWebserverInstances.mockResolvedValue(paginated([webserver]));
     mocks.listWebserverConfigActions.mockResolvedValue(paginated([]));
     mocks.listWebserverConfigReceipts.mockResolvedValue(paginated([]));
@@ -85,6 +97,37 @@ describe('WebserverAutoControl production hardening', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('shows exact all-tenant inventory and requires tenant selection before controls', async () => {
+    const user = userEvent.setup();
+    mocks.currentTenantId = null;
+    mocks.tenantList = [
+      { id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' },
+      { id: 'tenant-2', name: 'Bank B', created_at: '2026-01-02T00:00:00Z' },
+    ];
+    mocks.listWebserverInstances.mockImplementation(async ({ tenantId, limit }: { tenantId: string; limit: number }) => ({
+      data: [],
+      pagination: {
+        total: tenantId === 'tenant-1' ? 3 : 5,
+        count: 0,
+        limit,
+        offset: 0,
+        nextOffset: null,
+        prevOffset: null,
+      },
+    }));
+
+    renderWebservers();
+
+    expect(await screen.findByText('All tenants · detected webserver inventory.')).toBeInTheDocument();
+    expect(screen.getByText('8')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /apply capture/i })).not.toBeInTheDocument();
+    expect(mocks.listWebserverConfigActions).not.toHaveBeenCalled();
+
+    await user.click(screen.getAllByRole('button', { name: /open tenant/i })[1]);
+    expect(mocks.setCurrentTenantId).toHaveBeenCalledWith('tenant-2');
   });
 
   it('shows inventory failures as unavailable instead of false empty inventory', async () => {
