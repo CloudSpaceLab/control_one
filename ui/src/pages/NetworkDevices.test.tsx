@@ -76,6 +76,7 @@ describe('Network device workflow', () => {
   it('opens related workflows from a target detail deep link', async () => {
     mount(['/network-devices?device=switch-1']);
     expect(await screen.findByText('Agentless')).toBeInTheDocument();
+    expect(screen.getByText('Network & security · Switch')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Search events' })).toHaveAttribute('href', '/search?q=Branch%20switch');
     expect(screen.getByRole('link', { name: 'Open cases' })).toHaveAttribute('href', '/cases');
     expect(screen.getByRole('link', { name: 'Observability' })).toHaveAttribute('href', '/observability');
