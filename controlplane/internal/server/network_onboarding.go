@@ -175,6 +175,13 @@ func (s *Server) handleNetworkOnboarding(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "connection test capacity reached; try again shortly", 429)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	cidrs, policyErr := s.networkOnboardingAllowedCIDRs(ctx)
+	if policyErr != nil {
+		http.Error(w, "network onboarding policy unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	receipt, err := store.BeginNetworkConnectionTest(r.Context(), storage.NetworkConnectionTest{TenantID: p.TenantID, CredentialID: p.CredentialID, Protocol: protocol, Address: p.Address, Port: p.Port}, access)
 	if err != nil {
 		http.Error(w, "unable to begin connection test", 403)
@@ -182,10 +189,8 @@ func (s *Server) handleNetworkOnboarding(w http.ResponseWriter, r *http.Request)
 	}
 	principal, _ := s.authorize(w, r)
 	s.recordAudit(r.Context(), principal, p.TenantID, "network_connection.started", "network_connection_test", receipt.ID.String(), map[string]any{"protocol": protocol})
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
 	result := networkdevice.Outcome("unreachable")
-	ip, resolveErr := networkdevice.Resolve(ctx, p.Address, s.cfg.NetworkOnboarding.AllowedCIDRs)
+	ip, resolveErr := networkdevice.Resolve(ctx, p.Address, cidrs)
 	if resolveErr != nil {
 		result = networkdevice.Outcome(resolveErr.Error())
 	} else {
