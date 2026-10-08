@@ -125,3 +125,19 @@ func TestNetworkOnboardingWithPostgres(t *testing.T) {
 	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM enrollment_tokens`).Scan(&tokens))
 	require.Zero(t, tokens)
 }
+
+func TestNetworkOnboardingPolicyPersistsCIDRs(t *testing.T) {
+	ctx := context.Background()
+	s := setupTargetPostgresStore(t, ctx)
+	policy, err := s.GetNetworkOnboardingPolicy(ctx)
+	require.NoError(t, err)
+	require.Nil(t, policy)
+
+	want := []string{"192.168.56.10/32", "192.168.56.0/24"}
+	require.NoError(t, s.UpsertNetworkOnboardingPolicy(ctx, want))
+	policy, err = s.GetNetworkOnboardingPolicy(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, policy)
+	require.Equal(t, want, policy.AllowedCIDRs)
+	require.False(t, policy.UpdatedAt.IsZero())
+}

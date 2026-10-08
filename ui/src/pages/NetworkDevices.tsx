@@ -17,6 +17,7 @@ import { NetworkDeviceWizard } from '../components/NetworkDeviceWizard';
 import { NetworkInventoryPanel } from '../components/NetworkInventoryPanel';
 import { NetworkConfigurationPanel } from '../components/NetworkConfigurationPanel';
 import { NetworkTelemetryPanel } from '../components/NetworkTelemetryPanel';
+import { NetworkOnboardingPolicyPanel } from '../components/NetworkOnboardingPolicyPanel';
 
 const TYPES = [
   ['router', 'Router'], ['switch', 'Switch'], ['firewall', 'Firewall'],
@@ -61,6 +62,7 @@ export function NetworkDevices(): JSX.Element {
   const [identityOnly, setIdentityOnly] = useState(false);
   const canWrite = profile?.permissions?.includes('targets.write') ?? profile?.roles.some((role) => ['admin', 'operator'].includes(role)) ?? false;
   const canConnect = profile?.permissions?.includes('targets.connect') ?? profile?.roles.some((role) => ['admin', 'operator'].includes(role)) ?? false;
+  const isAdmin = profile?.roles.some((role) => role.trim().toLowerCase() === 'admin') ?? false;
   const tenantScope = currentTenantId ?? undefined;
   const previousTenant = useRef(currentTenantId);
   const resetFilters = useCallback(() => {
@@ -163,6 +165,7 @@ export function NetworkDevices(): JSX.Element {
     <SectionHeader eyebrow="OPERATIONS" title="Network devices" description="Agentless network and security inventory."
       actions={<><Button variant="secondary" onClick={() => list.refetch()}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>{canWrite && <Button onClick={() => { setFormError(null); setAdding(true); }}><Plus className="mr-2 h-4 w-4" />Add network device</Button>}</>} />
     <Alert variant="info" title="Read-only network onboarding">Test SNMPv3 or SSH credentials before saving a device. Connection authentication and recurring telemetry readiness are separate states.</Alert>
+    {isAdmin && <NetworkOnboardingPolicyPanel />}
     <Panel><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <div><Label htmlFor="device-search">Search devices</Label><Input id="device-search" placeholder="Name, hostname, serial or address" value={search} onChange={(event) => updateFilter('search', event.target.value, setSearch)} /></div>
       <div><Label htmlFor="device-type">Device type</Label><select id="device-type" className={selectClass} value={type} onChange={(event) => updateFilter('type', event.target.value, setType)}><option value="">All types</option>{TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div>

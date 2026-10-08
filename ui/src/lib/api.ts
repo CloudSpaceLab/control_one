@@ -145,6 +145,12 @@ export interface NetworkConnectionReceipt {
   };
 }
 
+export interface NetworkOnboardingPolicy {
+  allowed_cidrs: string[];
+  source: 'database' | 'server_config';
+  updated_at?: string;
+}
+
 export interface ListNetworkTargetsParams {
   tenantId?: string;
   search?: string;
@@ -2879,6 +2885,14 @@ export class APIClient {
 
   async saveNetworkOnboarding(payload: { test_id: string; display_name: string; type: string; site: string; group: string; telemetry_sources: string[] }): Promise<NetworkTarget> {
     return this.request('/api/v1/network-onboarding/save', { method: 'POST', body: JSON.stringify(payload) });
+  }
+
+  async getNetworkOnboardingPolicy(): Promise<NetworkOnboardingPolicy> {
+    return this.request('/api/v1/network-onboarding/policy');
+  }
+
+  async updateNetworkOnboardingPolicy(payload: { allowed_cidrs: string[] }): Promise<NetworkOnboardingPolicy> {
+    return this.request('/api/v1/network-onboarding/policy', { method: 'PUT', body: JSON.stringify(payload) });
   }
 
   async getNetworkTarget(id: string): Promise<NetworkTarget> {

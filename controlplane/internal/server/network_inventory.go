@@ -92,6 +92,13 @@ func (s *Server) handleNetworkInventory(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "connection capacity reached; try again shortly", 429)
 		return
 	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	cidrs, policyErr := s.networkOnboardingAllowedCIDRs(ctx)
+	if policyErr != nil {
+		http.Error(w, "network onboarding policy unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	receipt, err := store.BeginNetworkInventory(r.Context(), id, access)
 	if errors.Is(err, storage.ErrInventoryBusy) {
 		http.Error(w, "inventory refresh already in progress", 409)
@@ -103,10 +110,8 @@ func (s *Server) handleNetworkInventory(w http.ResponseWriter, r *http.Request) 
 	}
 	principal, _ := s.authorize(w, r)
 	s.recordAudit(r.Context(), principal, connection.TenantID, "network_inventory.started", "target", id.String(), map[string]any{"refresh_id": receipt.RefreshID.String(), "protocol": connection.Protocol})
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
 	inventory := networkdevice.Inventory{State: "unreachable"}
-	ip, err := networkdevice.Resolve(ctx, connection.Address, s.cfg.NetworkOnboarding.AllowedCIDRs)
+	ip, err := networkdevice.Resolve(ctx, connection.Address, cidrs)
 	if err != nil {
 		inventory.State = err.Error()
 	} else {
