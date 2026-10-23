@@ -3498,6 +3498,9 @@ type responseWriter struct {
 	bytes  int64
 }
 
+// Unwrap lets http.ResponseController reach the connection's deadline controls.
+func (w *responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *responseWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)

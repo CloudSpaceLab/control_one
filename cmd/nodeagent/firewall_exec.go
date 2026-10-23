@@ -30,6 +30,14 @@ var (
 const completedActionQueueCap = 256
 
 func enqueueCompletedAction(a completedAction) {
+	if isPatchDeploymentAction(a.Action) && agentPatchJournal != nil {
+		if err := agentPatchJournal.complete(a); err != nil {
+			// Never fall back to the volatile, overflow-dropping queue.
+			// The durable reservation prevents automatic re-execution after restart.
+			zap.L().Error("persist patch completion failed; recovery required", zap.String("job_id", a.JobID), zap.Error(err))
+		}
+		return
+	}
 	completedActionMu.Lock()
 	defer completedActionMu.Unlock()
 	if len(completedActionQueue) >= completedActionQueueCap {

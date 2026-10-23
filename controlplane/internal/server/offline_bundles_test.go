@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -222,7 +223,7 @@ func TestOfflineBundleImportMatchesAppDependencies(t *testing.T) {
 	}
 }
 
-func TestOfflineBundleImportReconcilesVulnerabilitiesWhenNoMatches(t *testing.T) {
+func TestOfflineBundleImportPreservesAdvisoryOmittedByNarrowerFeed(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -280,8 +281,75 @@ func TestOfflineBundleImportReconcilesVulnerabilitiesWhenNoMatches(t *testing.T)
 	if len(store.vulnerabilityFindings) != 1 {
 		t.Fatalf("vulnerability findings = %#v, want stale row only", store.vulnerabilityFindings)
 	}
-	if store.vulnerabilityFindings[0].ResolvedAt == nil {
-		t.Fatalf("expected empty match run to resolve stale scoped finding: %+v", store.vulnerabilityFindings[0])
+	if store.vulnerabilityFindings[0].ResolvedAt != nil {
+		t.Fatalf("narrower feed must retain an omitted advisory: %+v", store.vulnerabilityFindings[0])
+	}
+}
+
+func TestFixedBoundaryResolvesOnlyCoveredAdvisory(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	now := time.Now().UTC()
+	node := storage.Node{ID: uuid.New(), TenantID: uuid.New()}
+	store := &fakeStore{nodePackages: map[uuid.UUID][]storage.NodePackage{node.ID: {{NodeID: node.ID, Name: "openssl", Version: "3.0.2-0ubuntu1.15", Source: "apt"}}}}
+	for _, cve := range []string{"CVE-TEST-COVERED", "CVE-TEST-OMITTED"} {
+		store.vulnerabilityFindings = append(store.vulnerabilityFindings, storage.VulnerabilityFinding{ID: uuid.New(), NodeID: node.ID, TenantID: node.TenantID, PackageName: "openssl", InstalledVersion: "3.0.2-0ubuntu1.14", PackageSource: "apt", CVEID: cve, EvidenceSource: "offline_vulnerability_feed"})
+	}
+	feed := offlinebundle.VulnerabilityFeed{SchemaVersion: 1, Advisories: []offlinebundle.VulnerabilityAdvisory{{CVEID: "CVE-TEST-COVERED", AffectedPackages: []offlinebundle.VulnerabilityAffectedPkg{{Name: "openssl", Source: "apt", VersionScheme: "debian", VersionRange: "< 3.0.2-0ubuntu1.15", FixedVersion: "3.0.2-0ubuntu1.15"}}}}}
+	body := makeServerVulnerabilityBundleWithFeed(t, priv, "scoped-fix", "1", 1, now, feed)
+	if _, err := offlinebundle.Import(context.Background(), bytes.NewReader(body), offlinebundle.ImportOptions{RootDir: root, PublicKey: pub, Now: now}); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{logger: zap.NewNop()}
+	if _, err := s.importOfflineVulnerabilityFeedFindingsForNode(context.Background(), store, root, node, now); err != nil {
+		t.Fatal(err)
+	}
+	if store.vulnerabilityFindings[0].ResolvedAt == nil || store.vulnerabilityFindings[1].ResolvedAt != nil {
+		t.Fatalf("incorrect advisory reconciliation: %+v", store.vulnerabilityFindings)
+	}
+}
+
+func TestUnavailableVulnerabilityFeedPreservesExistingFindings(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"missing", "expired", "tampered"} {
+		t.Run(scenario, func(t *testing.T) {
+			root := t.TempDir()
+			now := time.Now().UTC()
+			node := storage.Node{ID: uuid.New(), TenantID: uuid.New()}
+			store := &fakeStore{
+				nodePackages:          map[uuid.UUID][]storage.NodePackage{node.ID: {{NodeID: node.ID, Name: "openssl", Version: "3.0.2-0ubuntu1.14", Source: "apt"}}},
+				vulnerabilityFindings: []storage.VulnerabilityFinding{{ID: uuid.New(), NodeID: node.ID, TenantID: node.TenantID, PackageName: "openssl", InstalledVersion: "3.0.2-0ubuntu1.14", PackageSource: "apt", CVEID: "CVE-TEST-RETAIN", EvidenceSource: "offline_vulnerability_feed", LastSeenAt: now.Add(-time.Hour)}},
+			}
+			if scenario != "missing" {
+				importTime := now
+				if scenario == "expired" {
+					importTime = now.Add(-365 * 24 * time.Hour)
+				}
+				body := makeServerVulnerabilityBundle(t, priv, "qualification", "1", 1, importTime)
+				receipt, err := offlinebundle.Import(context.Background(), bytes.NewReader(body), offlinebundle.ImportOptions{RootDir: root, PublicKey: pub, Now: importTime})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "tampered" {
+					if err := os.WriteFile(filepath.Clean(receipt.Contents[0].Active), []byte(`{"schema_version":1,"advisories":[]}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			s := &Server{logger: zap.NewNop()}
+			if _, err := s.importOfflineVulnerabilityFeedFindingsForNode(context.Background(), store, root, node, now); err == nil {
+				t.Fatal("expected assessment failure")
+			}
+			if len(store.vulnerabilityFindings) != 1 || store.vulnerabilityFindings[0].ResolvedAt != nil || !store.vulnerabilityFindings[0].LastSeenAt.Equal(now.Add(-time.Hour)) {
+				t.Fatalf("failed assessment changed existing finding: %+v", store.vulnerabilityFindings)
+			}
+		})
 	}
 }
 

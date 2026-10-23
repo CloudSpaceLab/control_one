@@ -198,10 +198,11 @@ function telemetryCollectorStates(node: import('@/lib/api').Node): TelemetryColl
 
 function TelemetryReadiness({ node }: { node: import('@/lib/api').Node }): JSX.Element {
   const collectors = telemetryCollectorStates(node);
-  const hasFailure = collectors.some((collector) => collector.state === 'stopped' && collector.backoff_reason);
+  const hasFailure = collectors.some((collector) => (collector.state === 'stopped' || collector.state === 'unsupported') && collector.backoff_reason);
   const allRunning = collectors.length > 0 && collectors.every((collector) => collector.state === 'running');
+  const limitedByProfile = collectors.some((collector) => collector.state === 'disabled') && collectors.every((collector) => collector.state === 'running' || collector.state === 'disabled');
   const tone: StateTone = hasFailure ? 'critical' : allRunning ? 'healthy' : collectors.length > 0 ? 'warning' : 'unknown';
-  const label = hasFailure ? 'Needs attention' : allRunning ? 'Ready' : collectors.length > 0 ? 'Starting' : 'Waiting for first heartbeat';
+  const label = hasFailure ? 'Needs attention' : allRunning ? 'Ready' : limitedByProfile ? 'Limited by profile' : collectors.length > 0 ? 'Starting' : 'Waiting for first heartbeat';
 
   return (
     <div className="mt-3 border-t border-border-subtle pt-3" aria-label="Telemetry readiness">
@@ -218,7 +219,7 @@ function TelemetryReadiness({ node }: { node: import('@/lib/api').Node }): JSX.E
             <div key={collector.name} className="flex items-center justify-between gap-2 rounded border border-border-subtle bg-surface-2 px-2 py-1.5 text-[0.7rem]">
               <span className="min-w-0 truncate text-text-secondary" title={collector.name}>{collector.name}</span>
               <span className="min-w-0 text-right">
-                <span className={collector.state === 'running' ? 'text-brand-400' : collector.state === 'stopped' ? 'text-danger-300' : 'text-accent-400'}>
+                <span className={collector.state === 'running' ? 'text-brand-400' : (collector.state === 'stopped' || collector.state === 'unsupported') ? 'text-danger-300' : 'text-accent-400'}>
                   {collector.state}
                 </span>
                 {collector.backoff_reason && collector.state !== 'running' && (
@@ -234,8 +235,9 @@ function TelemetryReadiness({ node }: { node: import('@/lib/api').Node }): JSX.E
         <p className="mt-2 text-xs text-text-muted">The agent has not reported collector state yet.</p>
       )}
       {hasFailure && (
-        <p className="mt-2 text-xs text-danger-300">{collectors.find((collector) => collector.state === 'stopped' && collector.backoff_reason)?.backoff_reason}</p>
+        <p className="mt-2 text-xs text-danger-300">{collectors.find((collector) => (collector.state === 'stopped' || collector.state === 'unsupported') && collector.backoff_reason)?.backoff_reason}</p>
       )}
+      {limitedByProfile && <p className="mt-2 text-xs text-text-secondary">Some collectors are disabled by the selected runtime profile; coverage is partial.</p>}
     </div>
   );
 }

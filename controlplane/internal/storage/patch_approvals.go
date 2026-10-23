@@ -17,6 +17,7 @@ import (
 // dispatches the underlying patch.deploy_* job. Mirrors the lifecycle of
 // remediation_approvals: pending → approved | denied | expired.
 type PatchApproval struct {
+	PolicyHash   string
 	ID           uuid.UUID
 	TenantID     uuid.UUID
 	DeploymentID uuid.UUID
@@ -33,6 +34,7 @@ type PatchApproval struct {
 
 // CreatePatchApprovalParams collects the input to CreatePatchApproval.
 type CreatePatchApprovalParams struct {
+	PolicyHash   string
 	TenantID     uuid.UUID
 	DeploymentID uuid.UUID
 	NodeID       uuid.UUID
@@ -85,11 +87,11 @@ func (s *Store) CreatePatchApproval(ctx context.Context, params CreatePatchAppro
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO patch_approvals (
 			id, tenant_id, deployment_id, node_id, mode, proxy_id, window_id,
-			status, created_at, expires_at
+			status, created_at, expires_at, policy_hash
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, tenant_id, deployment_id, node_id, mode, proxy_id, window_id,
-		          status, approved_by, approved_at, created_at, expires_at
+		          status, approved_by, approved_at, created_at, expires_at, policy_hash
 	`,
 		id,
 		params.TenantID,
@@ -101,6 +103,7 @@ func (s *Store) CreatePatchApproval(ctx context.Context, params CreatePatchAppro
 		string(ApprovalStatusPending),
 		now,
 		params.ExpiresAt.UTC(),
+		params.PolicyHash,
 	)
 
 	return scanPatchApproval(row)
@@ -116,7 +119,7 @@ func (s *Store) GetPatchApproval(ctx context.Context, id uuid.UUID) (*PatchAppro
 	}
 	row := s.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, deployment_id, node_id, mode, proxy_id, window_id,
-		       status, approved_by, approved_at, created_at, expires_at
+		       status, approved_by, approved_at, created_at, expires_at, policy_hash
 		FROM patch_approvals
 		WHERE id = $1
 	`, id)
@@ -179,7 +182,7 @@ func (s *Store) ListPatchApprovals(ctx context.Context, filter ListPatchApproval
 
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, deployment_id, node_id, mode, proxy_id, window_id,
-		       status, approved_by, approved_at, created_at, expires_at
+		       status, approved_by, approved_at, created_at, expires_at, policy_hash
 		FROM patch_approvals
 		WHERE %s
 		ORDER BY created_at DESC
@@ -240,9 +243,9 @@ func (s *Store) ResolvePatchApproval(ctx context.Context, id uuid.UUID, status A
 		SET status      = $2,
 		    approved_by = $3,
 		    approved_at = $4
-		WHERE id = $1 AND status = 'pending'
+		WHERE id = $1 AND status = 'pending' AND expires_at > $4
 		RETURNING id, tenant_id, deployment_id, node_id, mode, proxy_id, window_id,
-		          status, approved_by, approved_at, created_at, expires_at
+		          status, approved_by, approved_at, created_at, expires_at, policy_hash
 	`, id, string(status), approverArg, now)
 
 	a, err := scanPatchApproval(row)
@@ -301,6 +304,7 @@ func scanPatchApproval(row *sql.Row) (*PatchApproval, error) {
 		&approvedAt,
 		&a.CreatedAt,
 		&a.ExpiresAt,
+		&a.PolicyHash,
 	); err != nil {
 		return nil, err
 	}
@@ -349,6 +353,7 @@ func scanPatchApprovalRows(rows *sql.Rows) (*PatchApproval, error) {
 		&approvedAt,
 		&a.CreatedAt,
 		&a.ExpiresAt,
+		&a.PolicyHash,
 	); err != nil {
 		return nil, fmt.Errorf("scan patch approval: %w", err)
 	}

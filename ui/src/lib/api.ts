@@ -4900,6 +4900,8 @@ export class APIClient {
     node_ids?: string[];
     mode?: "direct" | "proxy" | "airgapped" | "auto";
     reason?: string;
+    package_allowlist?: string[];
+    post_patch_rescan?: boolean;
   }): Promise<PatchDeployResponse> {
     return this.request<PatchDeployResponse>("/api/v1/patch/deployments", {
       method: "POST",
@@ -7304,6 +7306,11 @@ export interface PatchDeploymentSummary {
   known_high_findings: number;
   known_kev_findings: number;
   known_patchable_findings: number;
+  assessment?: {
+    status: 'partial' | 'expired' | 'unavailable';
+    feed_count: number;
+    coverage: string;
+  };
   windows_scheduled: number;
   windows_open: number;
   windows_closing: number;

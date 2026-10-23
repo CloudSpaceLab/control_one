@@ -136,3 +136,25 @@ func TestBuildNVDCPEVersionRange(t *testing.T) {
 		t.Fatalf("nvd range = %#v", pkg)
 	}
 }
+
+func TestBuildNVDAPI20References(t *testing.T) {
+	feed, err := Build([]Input{{Format: "nvd", Name: "api-response.json", Data: []byte(`{
+		"vulnerabilities":[{"cve":{
+			"id":"CVE-2026-58052",
+			"references":[{"url":"https://www.7-zip.org/history.txt","source":"vendor"}],
+			"configurations":[{"nodes":[{"cpeMatch":[{
+				"vulnerable":true,"criteria":"cpe:2.3:a:7-zip:7-zip:*:*:*:*:*:*:*:*",
+				"versionEndExcluding":"26.03"
+			}]}]}]
+		}}]
+	}`)}}, Options{})
+	if err != nil {
+		t.Fatalf("Build API 2.0 response: %v", err)
+	}
+	if len(feed.Advisories) != 1 || len(feed.Advisories[0].References) != 1 || feed.Advisories[0].References[0] != "https://www.7-zip.org/history.txt" {
+		t.Fatalf("API references lost: %#v", feed.Advisories)
+	}
+	if pkg := feed.Advisories[0].AffectedPackages[0]; pkg.FixedVersion != "26.03" || pkg.VersionRanges[0].Range != "< 26.03" {
+		t.Fatalf("API affected range lost: %#v", pkg)
+	}
+}

@@ -326,6 +326,16 @@ func joinLogSourceStrings(values []string) string {
 
 func (s *Service) runCollectorLoop(ctx context.Context, nodeID string, source config.LogSourceConfig, out chan<- logs.RawLog) {
 	defer close(out)
+	// Missing platform prerequisites are an unsupported configured source,
+	// not a collector that briefly ran and then stopped. Keep coverage visibly
+	// incomplete; the operator must provision a real backend and restart.
+	if strings.EqualFold(strings.TrimSpace(source.Type), "journald") {
+		if _, err := exec.LookPath("journalctl"); err != nil {
+			s.updateLogSourceState(source, "unsupported", "journald backend unavailable: journalctl is not installed; authentication-log coverage is incomplete")
+			s.log.Warn("configured log source unsupported", zap.String("program", source.Program), zap.Error(err))
+			return
+		}
+	}
 	backoff := time.Second
 	const maxBackoff = 30 * time.Second
 

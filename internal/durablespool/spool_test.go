@@ -2,8 +2,46 @@ package durablespool
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
+
+func TestQuarantinePreservesPayloadAndBoundsStorage(t *testing.T) {
+	s, err := New(Options{Dir: t.TempDir(), Prefix: "event", MaxBytes: 4096})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := s.AppendBytes([]byte("retained evidence"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := s.Quarantine(Record{Path: path}, "expired event")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != "retained evidence" {
+		t.Fatalf("payload=%q error=%v", data, err)
+	}
+	stats, err := s.Stats()
+	if err != nil || stats.Records != 0 || stats.QuarantinedRecords != 1 || stats.DroppedRecords != 0 {
+		t.Fatalf("stats=%+v error=%v", stats, err)
+	}
+	path, err = s.AppendBytes([]byte("must remain active"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.maxBytes = 1
+	if _, err = s.Quarantine(Record{Path: path}, "budget test"); err == nil {
+		t.Fatal("quarantine exceeded budget")
+	}
+	if _, err = os.Stat(path); err != nil {
+		t.Fatal("budget failure lost active record", err)
+	}
+	if _, err = s.Quarantine(Record{Path: target}, "nested record"); err == nil {
+		t.Fatal("accepted inactive record")
+	}
+}
 
 func TestSpoolAppendsListsReadsAndDeletesRecords(t *testing.T) {
 	t.Parallel()

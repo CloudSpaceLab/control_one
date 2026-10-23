@@ -4,8 +4,10 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -174,11 +176,27 @@ func TestAgentBundleStreamsTarballWithExpectedEntries(t *testing.T) {
 	entries := readBundle(t, rec.Body.Bytes())
 
 	// Must contain: binary, manifest, config, install script, ca.pem, signature.
-	required := []string{"controlone-agent", "manifest.json", "config.yaml", "install-offline.sh", "ca.pem", "controlone-agent.sig"}
+	required := []string{"controlone-agent", "manifest.json", "config.yaml", "install-offline.sh", "ca.pem", "controlone-agent.sig", "signing-public-key.pem"}
 	for _, name := range required {
 		if _, ok := entries[name]; !ok {
 			t.Fatalf("bundle missing entry %q; have %v", name, keysOf(entries))
 		}
+	}
+	pub, _, err := parseEd25519PublicKeyPEM(entries["signing-public-key.pem"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(string(entries["controlone-agent.sig"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(entries["controlone-agent"])
+	if !ed25519.Verify(pub, digest[:], sig) {
+		t.Fatal("bundled key must verify bundled signature")
+	}
+	altered := sha256.Sum256([]byte("altered-binary"))
+	if ed25519.Verify(pub, altered[:], sig) {
+		t.Fatal("altered binary accepted")
 	}
 
 	// Manifest should validate as JSON and reference the binary's hash.

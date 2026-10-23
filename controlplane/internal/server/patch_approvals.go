@@ -257,6 +257,25 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "approval has expired", http.StatusConflict)
 		return
 	}
+	// Approval never bypasses current non-approval safety checks. A read
+	// failure must leave the approval pending and dispatch nothing.
+	gate := s.previewPatchSafetyGates(r.Context(), approval.TenantID, approval.NodeID, approval.Mode, approval.WindowID)
+	if !gate.Allowed && !gate.AwaitingApproval {
+		http.Error(w, "patch approval blocked: "+gate.Reason, http.StatusConflict)
+		return
+	}
+	deployment, derr := s.store.GetPatchDeployment(r.Context(), approval.DeploymentID)
+	if derr != nil || deployment == nil || deployment.TenantID != approval.TenantID {
+		http.Error(w, "cannot verify approved deployment policy", http.StatusServiceUnavailable)
+		return
+	}
+	policy := patchPackagePolicyFromSummary(deployment.Summary)
+	policyHash, proxyURL, hashErr := s.patchApprovalPolicyHash(r.Context(), approval.TenantID, approval.NodeID, approval.Mode, approval.ProxyID, approval.WindowID, policy)
+	if hashErr != nil || approval.PolicyHash == "" || policyHash != approval.PolicyHash {
+		http.Error(w, "approved patch plan changed or has no policy snapshot; create a new deployment for review", http.StatusConflict)
+		return
+	}
+	policy.approvedProxyURL = proxyURL
 
 	approverID, _ := uuid.Parse(strings.TrimSpace(approverSubject))
 
@@ -271,16 +290,7 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Re-dispatch with the snapshot stored on the approval. We bypass the
-	// gate here intentionally — the operator has already greenlit this
-	// (deployment, node) pair. A future hardening pass could re-run the
-	// non-approval gates (change window / circuit breaker) before
-	// dispatching, but for now we stay aligned with the compliance approve
-	// loop which also bypasses on approve.
-	policy := patchPackagePolicy{}
-	if deployment, derr := s.store.GetPatchDeployment(r.Context(), updated.DeploymentID); derr == nil && deployment != nil {
-		policy = patchPackagePolicyFromSummary(deployment.Summary)
-	}
+	// Dispatch only after the current gates and required policy read passed.
 	state, dispErr := s.dispatchPatchModeToNode(
 		r.Context(),
 		updated.TenantID,

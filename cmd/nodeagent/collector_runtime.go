@@ -17,14 +17,15 @@ type collectorRuntime struct {
 }
 
 type collectorHandle struct {
-	name          string
-	state         string
-	backoffReason string
-	startedAt     time.Time
-	cancel        context.CancelFunc
-	run           func(context.Context)
-	backend       func() string
-	generation    uint64
+	name              string
+	state             string
+	backoffReason     string
+	startedAt         time.Time
+	cancel            context.CancelFunc
+	run               func(context.Context)
+	backend           func() string
+	generation        uint64
+	unavailableReason func() string
 }
 
 func newCollectorRuntime(ctx context.Context, log *zap.Logger) *collectorRuntime {
@@ -50,6 +51,13 @@ func (r *collectorRuntime) MarkDisabled(name, reason string, backend func() stri
 	r.collectors[name] = &collectorHandle{name: name, state: "disabled", backoffReason: reason, backend: backend}
 }
 
+func (r *collectorRuntime) RegisterWithPrerequisite(name string, run func(context.Context), backend func() string, unavailableReason func() string) {
+	r.Register(name, run, backend)
+	r.mu.Lock()
+	r.collectors[name].unavailableReason = unavailableReason
+	r.mu.Unlock()
+}
+
 func (r *collectorRuntime) SetEnabled(name string, enabled bool, reason string) {
 	if enabled {
 		r.Start(name)
@@ -64,6 +72,14 @@ func (r *collectorRuntime) Start(name string) {
 	if h == nil || h.run == nil || h.state == "running" {
 		r.mu.Unlock()
 		return
+	}
+	if h.unavailableReason != nil {
+		if reason := h.unavailableReason(); reason != "" {
+			h.state = "unsupported"
+			h.backoffReason = reason
+			r.mu.Unlock()
+			return
+		}
 	}
 	childCtx, cancel := context.WithCancel(r.ctx)
 	h.cancel = cancel

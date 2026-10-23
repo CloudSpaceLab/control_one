@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -259,6 +260,16 @@ func (b *Batcher) drainSpool(ctx context.Context) {
 			_ = b.spool.Delete(record)
 			continue
 		}
+		if reason := eventBatchOutsideReplayWindow(batch.Events, time.Now().UTC()); reason != "" {
+			path, err := b.spool.Quarantine(record, reason)
+			if b.log != nil {
+				b.log.Warn("eventstream batch quarantined; manual review required", zap.String("path", path), zap.String("reason", reason), zap.Error(err))
+			}
+			if err != nil {
+				return
+			}
+			continue
+		}
 		body, err := encodeBatch(batch.Events)
 		if err != nil {
 			if b.log != nil {
@@ -284,6 +295,21 @@ func (b *Batcher) drainSpool(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func eventBatchOutsideReplayWindow(events []Event, now time.Time) string {
+	for _, event := range events {
+		if event.TS.IsZero() {
+			continue
+		}
+		if event.TS.Before(now.Add(-7 * 24 * time.Hour)) {
+			return "event timestamp predates the server seven-day ingestion window"
+		}
+		if event.TS.After(now.Add(30 * time.Minute)) {
+			return "event timestamp exceeds the server future-skew window; check the clock"
+		}
+	}
+	return ""
 }
 
 func eventReplayKey(events []Event) string {
@@ -317,11 +343,13 @@ func encodeBatch(events []Event) ([]byte, error) {
 
 func (b *Batcher) postWithRetry(ctx context.Context, body []byte, replayKey string) error {
 	delay := b.retryMin
+	var lastErr error
 	for attempt := 0; attempt < 6; attempt++ {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		retryAfter, ok, err := b.postOnce(ctx, body, replayKey)
+		lastErr = err
 		if ok {
 			return nil
 		}
@@ -343,7 +371,7 @@ func (b *Batcher) postWithRetry(ctx context.Context, body []byte, replayKey stri
 			delay = b.retryMax
 		}
 	}
-	return fmt.Errorf("ingest exhausted retries")
+	return fmt.Errorf("ingest exhausted retries: %w", lastErr)
 }
 
 // postOnce returns (retryAfter, success, err). retryAfter is the server-hinted
@@ -372,7 +400,8 @@ func (b *Batcher) postOnce(ctx context.Context, body []byte, replayKey string) (
 		ra := parseRetryAfter(resp.Header.Get("Retry-After"))
 		return ra, false, fmt.Errorf("ingest status %d", resp.StatusCode)
 	}
-	return 0, false, fmt.Errorf("ingest status %d (non-retryable)", resp.StatusCode)
+	diagnostic, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return 0, false, fmt.Errorf("ingest status %d (non-retryable): %s", resp.StatusCode, strings.TrimSpace(string(diagnostic)))
 }
 
 func parseRetryAfter(s string) time.Duration {

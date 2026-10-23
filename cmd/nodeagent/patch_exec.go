@@ -60,6 +60,23 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		return
 	}
 	jobType, jobID := parts[0], parts[1]
+	if isPatchDeploymentAction(jobType) {
+		if agentPatchJournal == nil {
+			log.Error("patch execution refused: durable journal unavailable")
+			return
+		}
+		reserved, err := agentPatchJournal.reserve(jobID, jobType)
+		if err != nil || !reserved {
+			if err != nil {
+				log.Error("patch reservation failed", zap.Error(err))
+			}
+			return
+		}
+		// Serialize all package-changing jobs on this node, including different
+		// deployments delivered by overlapping heartbeats.
+		patchExecutionMu.Lock()
+		defer patchExecutionMu.Unlock()
+	}
 
 	detail, err := fetchPatchJobDetail(ctx, client, jobID)
 	if err != nil {
@@ -71,6 +88,12 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 			Error:  fmt.Sprintf("fetch job detail: %v", err),
 		})
 		return
+	}
+	if isPatchDeploymentAction(jobType) {
+		if err := validatePatchDispatchIdentity(jobType, detail, patchAgentNodeID); err != nil {
+			enqueueCompletedAction(completedAction{Action: jobType, JobID: jobID, Status: "failed", Error: err.Error()})
+			return
+		}
 	}
 
 	// Inventory scan — read-only, separate code path.
@@ -440,6 +463,7 @@ func countUpgradedPackages(out string) int {
 }
 
 func parseAptUpgradedCount(out string) int {
+	unpackedUpgrades := map[string]struct{}{}
 	for _, line := range strings.Split(out, "\n") {
 		// Format: "5 upgraded, 0 newly installed, 0 to remove and 1 not upgraded."
 		if idx := strings.Index(line, " upgraded,"); idx > 0 {
@@ -449,8 +473,17 @@ func parseAptUpgradedCount(out string) int {
 				return n
 			}
 		}
+		// apt-get -qq suppresses the summary but dpkg still reports replacements.
+		// A fresh install has no "over (old-version)" suffix and is not an upgrade.
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Unpacking ") && strings.Contains(line, " over (") {
+			fields := strings.Fields(line)
+			if len(fields) >= 4 {
+				unpackedUpgrades[fields[1]] = struct{}{}
+			}
+		}
 	}
-	return 0
+	return len(unpackedUpgrades)
 }
 
 func parseDnfUpgradedCount(out string) int {
@@ -511,6 +544,9 @@ func fetchPatchJobDetail(ctx context.Context, client *api.Client, jobID string) 
 		return detail, fmt.Errorf("get job %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var envelope struct {
+		ID      string          `json:"id"`
+		Type    string          `json:"type"`
+		Status  string          `json:"status"`
 		Payload json.RawMessage `json:"payload"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
@@ -519,8 +555,27 @@ func fetchPatchJobDetail(ctx context.Context, client *api.Client, jobID string) 
 	if len(envelope.Payload) == 0 {
 		return detail, fmt.Errorf("job has empty payload")
 	}
+	if envelope.ID != jobID || envelope.Status == "cancelled" || envelope.Status == "failed" || envelope.Status == "succeeded" {
+		return detail, fmt.Errorf("patch job identity or execution status invalid")
+	}
 	if err := json.Unmarshal(envelope.Payload, &detail); err != nil {
 		return detail, fmt.Errorf("decode patch payload: %w", err)
 	}
+	if isPatchDeploymentAction(envelope.Type) {
+		expectedMode := map[string]string{patchJobDirect: "direct", patchJobProxy: "proxy", patchJobAirgapped: "airgapped"}[envelope.Type]
+		if detail.Mode != expectedMode {
+			return detail, fmt.Errorf("patch job type and mode mismatch")
+		}
+	} else if envelope.Type != patchJobInventory {
+		return detail, fmt.Errorf("unexpected patch job type")
+	}
 	return detail, nil
+}
+
+func validatePatchDispatchIdentity(action string, detail patchActionDetail, nodeID string) error {
+	expectedMode := map[string]string{patchJobDirect: "direct", patchJobProxy: "proxy", patchJobAirgapped: "airgapped"}[action]
+	if nodeID == "" || detail.NodeID != nodeID || detail.NodePatchStateID == "" || detail.DeploymentID == "" || expectedMode == "" || detail.Mode != expectedMode {
+		return fmt.Errorf("patch dispatch does not match this node, action, or execution identity")
+	}
+	return nil
 }

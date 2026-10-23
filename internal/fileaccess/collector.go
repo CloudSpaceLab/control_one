@@ -133,6 +133,27 @@ func (m *Manager) UpdateFilter(watched []string, forensic bool) {
 }
 
 // Run picks a backend and forwards events until ctx is cancelled.
+func (m *Manager) UnavailableReason() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.chosen == nil {
+		m.chosen = pickFileBackend(m.log, m.opts)
+	}
+	if m.chosen == nil {
+		return "no supported file-access backend is available; file-access coverage is incomplete"
+	}
+	return ""
+}
+
+func (m *Manager) BackendName() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.chosen == nil {
+		return "unavailable"
+	}
+	return m.chosen.Name()
+}
+
 func (m *Manager) Run(ctx context.Context) {
 	if m.opts.FilterCfg.Disabled {
 		if m.log != nil {
@@ -140,7 +161,10 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 		return
 	}
-	col := pickFileBackend(m.log, m.opts)
+	m.UnavailableReason()
+	m.mu.RLock()
+	col := m.chosen
+	m.mu.RUnlock()
 	if col == nil {
 		if m.log != nil {
 			m.log.Info("fileaccess: no backend on this platform; skipping")

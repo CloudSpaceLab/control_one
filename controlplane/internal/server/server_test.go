@@ -6923,11 +6923,46 @@ func (f *fakeStore) ReconcileVulnerabilityFindings(_ context.Context, params sto
 		}
 		scopeKey := fakeVulnerabilityPackageKey(finding.PackageName, finding.InstalledVersion, finding.PackageSource, finding.Arch)
 		if _, ok := scoped[scopeKey]; !ok {
+			covered := false
+			if params.ResolveHistoricalVersions {
+				for _, scope := range params.PackageScopes {
+					if scope.PackageName == finding.PackageName && scope.PackageSource == finding.PackageSource && scope.Arch == finding.Arch {
+						covered = true
+					}
+				}
+			}
+			if !covered {
+				continue
+			}
+		}
+		if finding.LastSeenAt.After(observedAt) {
 			continue
 		}
 		activeKey := scopeKey + "|" + strings.ToUpper(strings.TrimSpace(finding.CVEID))
+		if params.CVEIDs != nil {
+			covered := false
+			for _, cveID := range params.CVEIDs {
+				if cveID == finding.CVEID {
+					covered = true
+				}
+			}
+			if !covered {
+				continue
+			}
+		}
 		if _, ok := active[activeKey]; ok {
 			continue
+		}
+		if params.ResolveHistoricalVersions {
+			stillActive := false
+			for _, current := range params.ActiveFindings {
+				if current.PackageName == finding.PackageName && current.PackageSource == finding.PackageSource && current.Arch == finding.Arch && current.CVEID == finding.CVEID {
+					stillActive = true
+				}
+			}
+			if stillActive {
+				continue
+			}
 		}
 		t := observedAt
 		finding.ResolvedAt = &t
@@ -7136,6 +7171,7 @@ func (f *fakeStore) CreatePatchApproval(_ context.Context, params storage.Create
 		Status:       storage.ApprovalStatusPending,
 		CreatedAt:    time.Now().UTC(),
 		ExpiresAt:    params.ExpiresAt.UTC(),
+		PolicyHash:   params.PolicyHash,
 	}
 	f.patchApprovals[id] = a
 	copy := a

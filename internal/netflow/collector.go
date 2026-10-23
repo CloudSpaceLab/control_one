@@ -225,7 +225,10 @@ func (m *Manager) handle(ev ConnectionEvent) {
 		details["netns"] = ev.NetNS
 	}
 	streamEv := eventstream.Event{
-		TS:          ev.StartedAt,
+		// This is a current observation of a connection, which may have been
+		// open for weeks. Keep its actual start/end times in Details; using
+		// StartedAt as every observation's timestamp makes live data expire.
+		TS:          time.Now().UTC(),
 		NodeID:      m.opts.NodeID,
 		TenantID:    m.opts.TenantID,
 		ConnID:      connID,

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
-	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,21 +58,11 @@ func NewSyncer(client *api.Client, log *zap.Logger, opts Options) (*Syncer, erro
 
 	if opts.PublicKeyPath != "" {
 		pub, fp, err := loadEd25519PublicKey(opts.PublicKeyPath)
-		switch {
-		case err == nil:
-			s.publicKey = pub
-			s.fingerprint = fp
-		case errors.Is(err, fs.ErrNotExist):
-			// Configured path that doesn't exist on disk — treat the same as
-			// "no path configured" so a stale config or a not-yet-provisioned
-			// key file can't keep the agent from booting.
-			if log != nil {
-				log.Warn("policy public key file missing; signature verification disabled",
-					zap.String("path", opts.PublicKeyPath))
-			}
-		default:
+		if err != nil {
 			return nil, err
 		}
+		s.publicKey = pub
+		s.fingerprint = fp
 	} else if log != nil {
 		log.Warn("policy public key path not configured; signature verification disabled")
 	}
@@ -158,6 +147,9 @@ func (s *Syncer) LoadCached() ([]Rule, error) {
 	var set PolicySet
 	if err := json.Unmarshal(b, &set); err != nil {
 		return nil, err
+	}
+	if err := s.verifySignature(&set); err != nil {
+		return nil, fmt.Errorf("verify cached policy set: %w", err)
 	}
 	return set.Policies, nil
 }

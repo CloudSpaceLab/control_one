@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
 )
@@ -137,9 +139,10 @@ type patchDeployResponse struct {
 }
 
 type patchPackagePolicy struct {
-	Allowlist       []string `json:"allowlist,omitempty"`
-	Denylist        []string `json:"denylist,omitempty"`
-	PostPatchRescan bool     `json:"post_patch_rescan,omitempty"`
+	approvedProxyURL string
+	Allowlist        []string `json:"allowlist,omitempty"`
+	Denylist         []string `json:"denylist,omitempty"`
+	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
 }
 
 type patchDeploymentPlan struct {
@@ -319,7 +322,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 			cfg, cfgErr := s.store.GetNodePatchConfig(r.Context(), nid)
 			if cfgErr != nil {
 				s.logger.Warn("get node patch config", zap.Error(cfgErr), zap.String("node_id", nid.String()))
-				nodeMode = patchModeDirect
+				nodeMode = "unavailable"
 			} else if cfg != nil {
 				nodeMode = cfg.Mode
 				proxyID = cfg.ProxyID
@@ -463,8 +466,12 @@ const patchApprovalTTL = 24 * time.Hour
 //     dispatch behaviour applies — the approval gate is a no-op so any
 //     non-blocking deploy fans straight out.
 func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, deploymentID uuid.UUID, mode string, proxyID, windowID *uuid.UUID) patchGateResult {
+	preflight := s.previewPatchSafetyGates(ctx, tenantID, nodeID, mode, windowID)
+	if !preflight.Allowed && !preflight.AwaitingApproval {
+		return preflight
+	}
 	if s.store == nil {
-		return patchGateResult{Allowed: true}
+		return patchGateResult{Reason: "patch safety store unavailable"}
 	}
 	now := time.Now().UTC()
 
@@ -490,7 +497,10 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	// defer outside a configured window. We surface that as a block (the
 	// operator can either wait or open a maintenance window explicitly).
 	cfg, cfgErr := s.store.GetTenantRemediationConfig(ctx, tenantID)
-	if cfgErr != nil || cfg == nil {
+	if cfgErr != nil {
+		return patchGateResult{Reason: "cannot read tenant patch safety policy"}
+	}
+	if cfg == nil {
 		defaults := storage.DefaultTenantRemediationConfig(tenantID)
 		cfg = &defaults
 	}
@@ -512,7 +522,16 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	// the tenant has opted out (PatchRequiresApproval=false) we keep the
 	// legacy immediate-dispatch path — the gate is a no-op.
 	if cfg.PatchRequiresApproval {
+		deployment, err := s.store.GetPatchDeployment(ctx, deploymentID)
+		if err != nil || deployment == nil || deployment.TenantID != tenantID {
+			return patchGateResult{Reason: "cannot snapshot patch approval policy"}
+		}
+		policyHash, _, err := s.patchApprovalPolicyHash(ctx, tenantID, nodeID, mode, proxyID, windowID, patchPackagePolicyFromSummary(deployment.Summary))
+		if err != nil {
+			return patchGateResult{Reason: err.Error()}
+		}
 		approval, err := s.store.CreatePatchApproval(ctx, storage.CreatePatchApprovalParams{
+			PolicyHash:   policyHash,
 			TenantID:     tenantID,
 			DeploymentID: deploymentID,
 			NodeID:       nodeID,
@@ -558,9 +577,34 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 
 func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID uuid.UUID, mode string, windowID *uuid.UUID) patchGateResult {
 	if s.store == nil {
-		return patchGateResult{Allowed: true}
+		return patchGateResult{Reason: "patch safety store unavailable"}
 	}
 	now := time.Now().UTC()
+	if mode != patchModeDirect && mode != patchModeProxy && mode != patchModeAirgapped {
+		return patchGateResult{Reason: "patch mode unavailable or unsupported"}
+	}
+	if nodeID == uuid.Nil {
+		return patchGateResult{Reason: "patch target missing"}
+	}
+	node, err := s.store.GetNode(ctx, nodeID)
+	if err != nil || node == nil || node.TenantID != tenantID {
+		return patchGateResult{Reason: "cannot verify patch target tenant and isolation policy"}
+	}
+	if windowID != nil {
+		window, werr := s.store.GetMaintenanceWindow(ctx, *windowID)
+		if werr != nil || window == nil || window.TenantID != tenantID {
+			return patchGateResult{Reason: "cannot verify maintenance window"}
+		}
+		member := false
+		for _, id := range window.NodeIDs {
+			if id == nodeID {
+				member = true
+			}
+		}
+		if !member || window.Status != "open" || window.ForceClosedAt != nil || now.Before(window.OpensAt) || !now.Before(window.ClosesAt) {
+			return patchGateResult{Reason: "maintenance window not open for this node"}
+		}
+	}
 	if nodeID != uuid.Nil {
 		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil && node.Labels != nil {
 			posture := nodeIsolationPostureFromNode(*node, now)
@@ -578,7 +622,10 @@ func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID u
 		}
 	}
 	cfg, cfgErr := s.store.GetTenantRemediationConfig(ctx, tenantID)
-	if cfgErr != nil || cfg == nil {
+	if cfgErr != nil {
+		return patchGateResult{Reason: "cannot read tenant patch safety policy"}
+	}
+	if cfg == nil {
 		defaults := storage.DefaultTenantRemediationConfig(tenantID)
 		cfg = &defaults
 	}
@@ -586,8 +633,11 @@ func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID u
 		return patchGateResult{Reason: "outside tenant change window"}
 	}
 	patchRuleID := "patch.deploy"
-	if breaker, err := s.store.GetCircuitBreakerState(ctx, tenantID, patchRuleID); err == nil &&
-		breaker != nil && breaker.AckedAt == nil {
+	breaker, err := s.store.GetCircuitBreakerState(ctx, tenantID, patchRuleID)
+	if err != nil {
+		return patchGateResult{Reason: "cannot read patch circuit breaker"}
+	}
+	if breaker != nil && breaker.AckedAt == nil {
 		return patchGateResult{Reason: fmt.Sprintf("circuit breaker tripped: %s", breaker.TrippedReason)}
 	}
 	if cfg.PatchRequiresApproval {
@@ -603,6 +653,38 @@ func stringSliceContainsFold(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// Bind approval to execution-affecting data, rather than loading a possibly
+// changed package policy or proxy endpoint after the operator approved it.
+func (s *Server) patchApprovalPolicyHash(ctx context.Context, tenantID, nodeID uuid.UUID, mode string, proxyID, windowID *uuid.UUID, policy patchPackagePolicy) (string, string, error) {
+	proxyURL := ""
+	snapshot := map[string]any{"tenant_id": tenantID, "node_id": nodeID, "mode": mode, "proxy_id": proxyID, "window_id": windowID, "package_policy": policy}
+	if proxyID != nil {
+		proxy, err := s.store.GetSquidProxy(ctx, *proxyID)
+		if err != nil || proxy == nil || proxy.TenantID != tenantID {
+			return "", "", errors.New("cannot verify approved proxy identity")
+		}
+		proxyURL = fmt.Sprintf("http://%s:%d", proxy.Host, proxy.Port)
+		snapshot["proxy_host"] = proxy.Host
+		snapshot["proxy_port"] = proxy.Port
+		snapshot["proxy_whitelist"] = proxy.Whitelist
+	}
+	if windowID != nil {
+		window, err := s.store.GetMaintenanceWindow(ctx, *windowID)
+		if err != nil || window == nil || window.TenantID != tenantID {
+			return "", "", errors.New("cannot verify approved maintenance window identity")
+		}
+		snapshot["window_nodes"] = window.NodeIDs
+		snapshot["window_opens_at"] = window.OpensAt
+		snapshot["window_closes_at"] = window.ClosesAt
+		snapshot["window_repositories"] = window.AllowRepos
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return "", "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data)), proxyURL, nil
 }
 
 func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Request) {
@@ -689,10 +771,12 @@ func (s *Server) handlePatchSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, struct {
 		storage.PatchDeploymentSummary
-		GeneratedAt time.Time `json:"generated_at"`
+		GeneratedAt time.Time                                   `json:"generated_at"`
+		Assessment  offlinebundle.VulnerabilityAssessmentStatus `json:"assessment"`
 	}{
 		PatchDeploymentSummary: summary,
 		GeneratedAt:            time.Now().UTC(),
+		Assessment:             offlinebundle.ActiveVulnerabilityAssessmentStatus(s.offlineContentRootDir()),
 	})
 }
 
@@ -731,7 +815,20 @@ func (s *Server) handleListPatchDeploymentNodes(w http.ResponseWriter, r *http.R
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
+		return
+	}
+	deployment, err := s.store.GetPatchDeployment(r.Context(), deploymentID)
+	if err != nil {
+		http.Error(w, "deployment lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if deployment == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, deployment.TenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListNodePatchStatesForDeployment(r.Context(), deploymentID)
@@ -757,7 +854,8 @@ func (s *Server) handlePatchDeploymentPlan(w http.ResponseWriter, r *http.Reques
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	var req patchDeployRequest
@@ -768,6 +866,9 @@ func (s *Server) handlePatchDeploymentPlan(w http.ResponseWriter, r *http.Reques
 	tenantID, err := uuid.Parse(strings.TrimSpace(req.TenantID))
 	if err != nil {
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleOperator, roleAdmin) {
 		return
 	}
 	requestedMode := strings.TrimSpace(req.Mode)
@@ -816,6 +917,9 @@ func (s *Server) handleAdvancePatchDeployment(w http.ResponseWriter, r *http.Req
 	}
 	if deployment == nil {
 		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, deployment.TenantID, roleOperator, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListNodePatchStatesForDeployment(r.Context(), deploymentID)
@@ -1060,7 +1164,7 @@ func (s *Server) resolvePatchModeForNode(ctx context.Context, nodeID uuid.UUID, 
 		cfg, err := s.store.GetNodePatchConfig(ctx, nodeID)
 		if err != nil {
 			s.logger.Warn("get node patch config", zap.Error(err), zap.String("node_id", nodeID.String()))
-			return patchModeDirect, nil, nil
+			return "unavailable", nil, nil
 		}
 		if cfg != nil {
 			nodeMode = cfg.Mode
@@ -1303,13 +1407,18 @@ func (s *Server) dispatchPatchModeToNode(
 	switch mode {
 	case patchModeProxy:
 		jobType = JobTypePatchDeployProxy
-		if proxyID != nil {
+		if policy.approvedProxyURL != "" {
+			payload.ProxyURL = policy.approvedProxyURL
+		} else if proxyID != nil {
 			proxy, perr := s.store.GetSquidProxy(ctx, *proxyID)
 			if perr != nil {
 				return state, fmt.Errorf("load proxy: %w", perr)
 			}
 			if proxy == nil {
 				return state, fmt.Errorf("proxy %s not found", proxyID)
+			}
+			if proxy.TenantID != tenantID {
+				return state, errors.New("proxy belongs to another tenant")
 			}
 			payload.ProxyURL = fmt.Sprintf("http://%s:%d", proxy.Host, proxy.Port)
 		} else {
@@ -1341,6 +1450,8 @@ func (s *Server) dispatchPatchModeToNode(
 	}
 	if err := s.store.SetNodePatchStateJobID(ctx, state.ID, created.ID); err != nil {
 		s.logger.Warn("set node patch state job id", zap.Error(err))
+		_ = s.store.UpdateJobStatus(ctx, created.ID, storage.JobStatusCancelled, "patch dispatch linkage failed", nil)
+		return state, fmt.Errorf("persist patch dispatch linkage: %w", err)
 	}
 	state.JobID = &created.ID
 	return state, nil
@@ -1479,7 +1590,8 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetPatchConfig(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -1489,6 +1601,18 @@ func (s *Server) handleGetPatchConfig(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("node_id")))
 	if err != nil {
 		http.Error(w, "node_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	node, err := s.store.GetNode(r.Context(), nodeID)
+	if err != nil {
+		http.Error(w, "node lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if node == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	cfg, err := s.store.GetNodePatchConfig(r.Context(), nodeID)
@@ -1531,6 +1655,18 @@ func (s *Server) handleUpsertPatchConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	mode := strings.TrimSpace(req.Mode)
+	targetNode, nerr := s.store.GetNode(r.Context(), nodeID)
+	if nerr != nil {
+		http.Error(w, "node lookup failed", http.StatusServiceUnavailable)
+		return
+	}
+	if targetNode == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, targetNode.TenantID, roleAdmin) {
+		return
+	}
 	switch mode {
 	case patchModeDirect, patchModeProxy, patchModeAirgapped:
 	default:
@@ -1545,6 +1681,15 @@ func (s *Server) handleUpsertPatchConfig(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		in.ProxyID = &pid
+		proxy, err := s.store.GetSquidProxy(r.Context(), pid)
+		if err != nil {
+			http.Error(w, "proxy lookup failed", http.StatusServiceUnavailable)
+			return
+		}
+		if proxy == nil || proxy.TenantID != targetNode.TenantID {
+			http.Error(w, "proxy does not belong to node tenant", http.StatusBadRequest)
+			return
+		}
 	}
 	if req.WindowID != nil && strings.TrimSpace(*req.WindowID) != "" {
 		wid, err := uuid.Parse(strings.TrimSpace(*req.WindowID))
@@ -1553,6 +1698,15 @@ func (s *Server) handleUpsertPatchConfig(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		in.WindowID = &wid
+		window, err := s.store.GetMaintenanceWindow(r.Context(), wid)
+		if err != nil {
+			http.Error(w, "window lookup failed", http.StatusServiceUnavailable)
+			return
+		}
+		if window == nil || window.TenantID != targetNode.TenantID {
+			http.Error(w, "window does not belong to node tenant", http.StatusBadRequest)
+			return
+		}
 	}
 	out, err := s.store.UpsertNodePatchConfig(r.Context(), in)
 	if err != nil {
@@ -1586,7 +1740,8 @@ func (s *Server) handleMaintenanceWindowsCollection(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) handleListMaintenanceWindows(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -1596,6 +1751,9 @@ func (s *Server) handleListMaintenanceWindows(w http.ResponseWriter, r *http.Req
 	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
 	if err != nil {
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListMaintenanceWindows(r.Context(), tenantID)
@@ -1641,6 +1799,9 @@ func (s *Server) handleCreateMaintenanceWindow(w http.ResponseWriter, r *http.Re
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 	if !req.ClosesAt.After(req.OpensAt) {
 		http.Error(w, "closes_at must be after opens_at", http.StatusBadRequest)
 		return
@@ -1653,6 +1814,15 @@ func (s *Server) handleCreateMaintenanceWindow(w http.ResponseWriter, r *http.Re
 			return
 		}
 		nodeIDs = append(nodeIDs, nid)
+		node, nerr := s.store.GetNode(r.Context(), nid)
+		if nerr != nil {
+			http.Error(w, "node lookup failed", http.StatusServiceUnavailable)
+			return
+		}
+		if node == nil || node.TenantID != tenantID {
+			http.Error(w, "window node does not belong to tenant", http.StatusBadRequest)
+			return
+		}
 	}
 	out, err := s.store.CreateMaintenanceWindow(r.Context(), storage.MaintenanceWindow{
 		TenantID:   tenantID,
@@ -1698,6 +1868,18 @@ func (s *Server) handleMaintenanceWindowSubroute(w http.ResponseWriter, r *http.
 	}
 	principal, ok := s.authorize(w, r, roleAdmin)
 	if !ok {
+		return
+	}
+	accessWindow, werr := s.store.GetMaintenanceWindow(r.Context(), id)
+	if werr != nil {
+		http.Error(w, "window lookup failed", http.StatusServiceUnavailable)
+		return
+	}
+	if accessWindow == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, accessWindow.TenantID, roleAdmin) {
 		return
 	}
 	switch parts[1] {
@@ -1772,7 +1954,8 @@ func (s *Server) handleSquidProxiesCollection(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleListSquidProxies(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin); !ok {
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -1782,6 +1965,9 @@ func (s *Server) handleListSquidProxies(w http.ResponseWriter, r *http.Request) 
 	tenantID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("tenant_id")))
 	if err != nil {
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListSquidProxies(r.Context(), tenantID)
@@ -1825,6 +2011,9 @@ func (s *Server) handleCreateSquidProxy(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "host is required", http.StatusBadRequest)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleAdmin) {
+		return
+	}
 	if req.Port == 0 {
 		req.Port = 3128
 	}
@@ -1858,6 +2047,22 @@ func (s *Server) handleSquidProxySubroute(w http.ResponseWriter, r *http.Request
 	id, err := uuid.Parse(parts[0])
 	if err != nil {
 		http.Error(w, "proxy id must be a UUID", http.StatusBadRequest)
+		return
+	}
+	accessPrincipal, accessOK := s.authorize(w, r, roleAdmin)
+	if !accessOK {
+		return
+	}
+	accessProxy, perr := s.store.GetSquidProxy(r.Context(), id)
+	if perr != nil {
+		http.Error(w, "proxy lookup failed", http.StatusServiceUnavailable)
+		return
+	}
+	if accessProxy == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.requireTenantAccess(w, r, accessPrincipal, accessProxy.TenantID, roleAdmin) {
 		return
 	}
 	if len(parts) == 1 {

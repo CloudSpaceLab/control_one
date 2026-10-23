@@ -21,6 +21,11 @@ const (
 // baseline without tearing down operator-owned firewall policy.
 func runPrimaryHardening() []string {
 	var warnings []string
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(marker); err == nil {
+			return []string{"host hardening unsupported in this container: configure fail2ban and kernel sysctl on the actual host; host protection is not established"}
+		}
+	}
 	if os.Geteuid() != 0 {
 		return []string{"primary hardening skipped: join must run as root to configure fail2ban and sysctl"}
 	}

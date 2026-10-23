@@ -7,6 +7,7 @@ import { Alert, SectionHeader, EmptyState, StatusTag, KpiTile, type StateTone } 
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { AllTenantPatchSummary } from '../features/patch-management/AllTenantPatchSummary';
+import { PatchAssessmentNotice } from '../features/patch-management/PatchAssessmentNotice';
 import { toast } from 'sonner';
 import type {
   PatchDeployment,
@@ -158,6 +159,8 @@ export function PatchManagement(): JSX.Element {
         }
       />
 
+      <PatchAssessmentNotice assessment={loadErrors.posture ? undefined : posture?.assessment} />
+
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <KpiTile
           label="Fresh package inventory"
@@ -179,13 +182,13 @@ export function PatchManagement(): JSX.Element {
           label="Known critical findings"
           value={loadErrors.posture || !posture ? 'N/A' : String(posture.known_critical_findings)}
           hint={posture && !loadErrors.posture ? `${posture.known_kev_findings} KEV · ${posture.known_patchable_findings} with known fix` : undefined}
-          tone={posture && !loadErrors.posture && posture.known_critical_findings > 0 ? 'critical' : 'healthy'}
+          tone={posture && !loadErrors.posture && posture.known_critical_findings > 0 ? 'critical' : 'unknown'}
         />
         <KpiTile
           label="Known affected nodes"
           value={loadErrors.posture || !posture ? 'N/A' : String(posture.known_affected_nodes)}
           hint={posture && !loadErrors.posture ? `${posture.known_active_findings} unresolved findings` : undefined}
-          tone={posture && !loadErrors.posture && posture.known_affected_nodes > 0 ? 'warning' : 'healthy'}
+          tone={posture && !loadErrors.posture && posture.known_affected_nodes > 0 ? 'warning' : 'unknown'}
         />
         <KpiTile
           label="Pending approvals"
@@ -340,6 +343,21 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
   );
 }
 
+function deploymentModeLabel(deployment: PatchDeployment): string {
+  if (deployment.Summary?.requested_mode !== 'auto') return deployment.Mode;
+  const waves = deployment.Summary.waves;
+  if (!Array.isArray(waves)) return 'auto (per node)';
+  const modes = new Set<string>();
+  for (const wave of waves) {
+    if (!wave || !Array.isArray(wave.nodes)) return 'auto (per node)';
+    for (const node of wave.nodes) {
+      if (!node || !['direct', 'proxy', 'airgapped'].includes(node.mode)) return 'auto (per node)';
+      modes.add(node.mode);
+    }
+  }
+  return modes.size === 1 ? `auto (${[...modes][0]})` : 'auto (per node)';
+}
+
 function DeploymentsPanel({
   loading,
   deployments,
@@ -401,7 +419,7 @@ function DeploymentsPanel({
             {deployments.map((d) => (
               <tr key={d.ID} className="border-t border-border hover:bg-hover">
                 <td className="px-3 py-2 text-text-secondary">{new Date(d.RequestedAt).toLocaleString()}</td>
-                <td className="px-3 py-2">{d.Mode}</td>
+                <td className="px-3 py-2">{deploymentModeLabel(d)}</td>
                 <td className="px-3 py-2">
                   <StatusTag tone={statusTone(d.Status)}>{d.Status}</StatusTag>
                 </td>
@@ -1086,7 +1104,7 @@ function DeploymentNodeDetail({
           <p className="text-xs uppercase tracking-wider text-text-secondary">Deployment</p>
           <h3 className="font-mono text-lg">{deployment.ID.slice(0, 8)}</h3>
           <p className="text-xs text-text-secondary">
-            {deployment.Mode} · {new Date(deployment.RequestedAt).toLocaleString()}
+            {deploymentModeLabel(deployment)} · {new Date(deployment.RequestedAt).toLocaleString()}
           </p>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose}>
@@ -1242,6 +1260,8 @@ function DeployForm({
   const [filter, setFilter] = useState('');
   const [mode, setMode] = useState<'auto' | 'direct' | 'proxy' | 'airgapped'>('auto');
   const [reason, setReason] = useState('');
+  const [packageAllowlist, setPackageAllowlist] = useState('');
+  const [postPatchRescan, setPostPatchRescan] = useState(true);
   const [loadingNodes, setLoadingNodes] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1324,6 +1344,8 @@ function DeployForm({
         node_ids: ids,
         mode,
         reason: reason.trim() || undefined,
+        package_allowlist: [...new Set(packageAllowlist.split(/[\s,]+/).filter(Boolean))],
+        post_patch_rescan: postPatchRescan,
       });
       const awaitingCount = resp.awaiting_approval?.length ?? 0;
       const blocked = resp.gate_blocked?.length ?? 0;
@@ -1387,6 +1409,24 @@ function DeployForm({
             />
           </label>
         </div>
+        <label className="block text-sm">
+          <span className="text-text-secondary">Package allowlist (optional)</span>
+          <input
+            type="text"
+            value={packageAllowlist}
+            onChange={(e) => setPackageAllowlist(e.target.value)}
+            className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm"
+            placeholder="e.g. perl-base"
+          />
+          <span className="mt-1 block text-xs text-text-secondary">
+            Separate package names with commas or spaces. Empty means all eligible packages.
+            Required dependencies may also change. Package selection is currently supported on Linux only.
+          </span>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={postPatchRescan} onChange={(e) => setPostPatchRescan(e.target.checked)} />
+          Refresh package inventory after patching
+        </label>
         <div className="flex items-center gap-2">
           <input
             type="search"

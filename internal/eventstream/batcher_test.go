@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +18,58 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/durablespool"
 )
+
+func TestBatcherBoundsRejectedResponseDiagnostic(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad event type: "+strings.Repeat("x", 3000), http.StatusBadRequest)
+	}))
+	defer srv.Close()
+	client, err := api.NewClient(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &Batcher{client: client, endpoint: "/api/v1/events/ingest"}
+	_, success, err := b.postOnce(context.Background(), []byte("unused"), "")
+	if success || err == nil || !strings.Contains(err.Error(), "bad event type") || len(err.Error()) > 1100 {
+		t.Fatalf("success=%v error=%v", success, err)
+	}
+}
+
+func TestBatcherQuarantinesExpiredBatchAndReplaysFreshBatch(t *testing.T) {
+	var accepted []Event
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		accepted, err = decodeEventRequest(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		w.WriteHeader(202)
+	}))
+	defer srv.Close()
+	client, err := api.NewClient(srv.URL, "", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := NewBatcher(client, NewStream(8), zap.NewNop(), BatcherOptions{SpoolDir: t.TempDir()})
+	_, err = b.spool.AppendJSON(eventSpoolBatch{Events: []Event{{Type: "conn.open", TS: time.Now().Add(-8 * 24 * time.Hour)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = b.spool.AppendJSON(eventSpoolBatch{Events: []Event{{Type: "conn.close", TS: time.Now()}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.drainSpool(context.Background())
+	stats, err := b.SpoolStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Records != 0 || stats.QuarantinedRecords != 1 || len(accepted) != 1 || accepted[0].Type != "conn.close" {
+		t.Fatalf("stats=%+v accepted=%+v", stats, accepted)
+	}
+}
 
 func TestBatcherReplaysDiskSpoolAfterOutage(t *testing.T) {
 	t.Parallel()

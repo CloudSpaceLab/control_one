@@ -37,3 +37,31 @@ func TestCollectorRuntimeStartStop(t *testing.T) {
 		t.Fatalf("unexpected stopped snapshot: %#v", snap)
 	}
 }
+
+func TestCollectorRuntimeUnavailablePrerequisite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{}, 1)
+	reason := "no supported backend"
+	rt := newCollectorRuntime(ctx, zap.NewNop())
+	rt.RegisterWithPrerequisite("fileaccess", func(ctx context.Context) { started <- struct{}{}; <-ctx.Done() }, nil, func() string { return reason })
+	rt.Start("fileaccess")
+	rt.Start("fileaccess")
+	state := rt.Snapshot()[0]
+	if state.State != "unsupported" || state.BackoffReason != reason {
+		t.Fatalf("state=%+v", state)
+	}
+	select {
+	case <-started:
+		t.Fatal("unsupported collector started")
+	default:
+	}
+	reason = ""
+	rt.Start("fileaccess")
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("collector did not recover when prerequisite became available")
+	}
+	rt.Stop("fileaccess", "test complete")
+}

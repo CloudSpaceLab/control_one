@@ -127,6 +127,10 @@ func main() {
 	}
 	defer logger.Sync(log)
 	logger.ReplaceGlobals(log)
+	agentPatchJournal, err = openPatchJournal(filepath.Join(filepath.Dir(cfg.StateFile), "patch-execution-journal.json"))
+	if err != nil {
+		log.Fatal("cannot initialize durable patch execution journal", zap.Error(err))
+	}
 
 	runtimeSettings := agentruntime.Resolve(cfg.AgentRuntime.Profile)
 	log.Info("agent runtime profile selected",
@@ -168,6 +172,7 @@ func main() {
 	if err != nil {
 		log.Fatal("registration failed", zap.Error(err))
 	}
+	patchAgentNodeID = state.NodeID
 	emitHook(ctx, hooksService, log, "agent.registration.success", state.NodeID, map[string]any{
 		"hostname": sysInfo.Hostname,
 	})
@@ -269,7 +274,7 @@ func main() {
 		TenantID:  state.TenantID,
 		FilterCfg: fileaccess.DefaultFilterConfig(),
 	})
-	collectors.Register("fileaccess", fileMgr.Run, func() string { return "policy-gated" })
+	collectors.RegisterWithPrerequisite("fileaccess", fileMgr.Run, fileMgr.BackendName, fileMgr.UnavailableReason)
 	if runtimeSettings.FileAccessDefaultEnabled {
 		collectors.Start("fileaccess")
 	}

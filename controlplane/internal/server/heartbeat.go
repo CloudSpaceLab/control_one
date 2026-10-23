@@ -183,6 +183,7 @@ type heartbeatResponse struct {
 	ApprovedLogSources     []nodeApprovedLogSource               `json:"approved_log_sources,omitempty"`
 	PendingActions         []string                              `json:"pending_actions,omitempty"`
 	FullInventoryRequested bool                                  `json:"full_inventory_requested,omitempty"`
+	AcknowledgedPatchJobs  []string                              `json:"acknowledged_patch_jobs,omitempty"`
 }
 
 // handleNodeHeartbeat is the mTLS endpoint the agent hits every heartbeat
@@ -313,6 +314,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		Activated:              activated,
 		NetworkPolicy:          networkPolicy,
 		FullInventoryRequested: fullInventoryRequested,
+		AcknowledgedPatchJobs:  s.persistedPatchCompletionAcknowledgments(r.Context(), nodeID, body.CompletedActions),
 	}
 	// Deliver tenant capture-filter policy back to the agent so collectors
 	// hot-reload without a restart. Storage layer returns defaults when no
@@ -414,10 +416,11 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 				continue
 			}
 			actionType := job.Type
-			if actionType == "" {
-				// Defensive fallback: if a row somehow lost its type, default
-				// to direct rather than dropping the action silently.
-				actionType = JobTypePatchDeployDirect
+			if job.TenantID != ps.TenantID || !agentUpdateJobTargetsNode(*job, nodeID) || job.Status == storage.JobStatusCancelled || job.Status == storage.JobStatusFailed || job.Status == storage.JobStatusSucceeded {
+				continue
+			}
+			if actionType != JobTypePatchDeployDirect && actionType != JobTypePatchDeployProxy && actionType != JobTypePatchDeployAirgapped {
+				continue
 			}
 			resp.PendingActions = append(resp.PendingActions, actionType+":"+ps.JobID.String())
 			if uerr := s.store.UpdateJobStatus(r.Context(), *ps.JobID, storage.JobStatusRunning, "agent notified via heartbeat", nil); uerr != nil {
@@ -854,7 +857,7 @@ func networkObservationKey(kind, value string) string {
 
 // processHeartbeatCompletedActions reads agent-reported outcomes for actions
 // dispatched on previous heartbeats.
-func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UUID, completed []heartbeatCompletedAction) bool {
+func (s *Server) processHeartbeatCompletedActions(ctx context.Context, reportingNodeID uuid.UUID, completed []heartbeatCompletedAction) bool {
 	if len(completed) == 0 {
 		return false
 	}
@@ -965,9 +968,61 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 			if ps == nil {
 				continue
 			}
+			// Bind completion to the authenticated node and persisted dispatch.
+			// The submitted job ID/action are untrusted agent input.
+			job, jerr := s.store.GetJob(ctx, jobID)
+			if jerr != nil || job == nil || reportingNodeID == uuid.Nil ||
+				ps.NodeID != reportingNodeID || job.TenantID != ps.TenantID ||
+				job.Type != c.Action || job.Status == storage.JobStatusCancelled || ps.JobID == nil || *ps.JobID != jobID {
+				s.logger.Warn("reject patch completion ownership or action mismatch", zap.String("job_id", jobID.String()))
+				continue
+			}
+			var dispatched patchJobPayload
+			if err := json.Unmarshal(job.Payload, &dispatched); err != nil ||
+				dispatched.NodeID != ps.NodeID.String() || dispatched.DeploymentID != ps.DeploymentID.String() || dispatched.NodePatchStateID != ps.ID.String() {
+				s.logger.Warn("reject patch completion dispatch mismatch", zap.String("job_id", jobID.String()))
+				continue
+			}
+			terminalMatch := (ps.Status == "applied" && c.Status == "succeeded") || (ps.Status == "failed" && c.Status == "failed")
+			if (c.Status != "succeeded" && c.Status != "failed") || (ps.Status != "pending" && !terminalMatch) {
+				continue
+			}
+			if terminalMatch && ((c.Status == "succeeded" && job.Status == storage.JobStatusSucceeded) || (c.Status == "failed" && job.Status == storage.JobStatusFailed)) {
+				if c.Status == "succeeded" && s.patchJobRequestsPostPatchRescan(ctx, jobID) {
+					requestFullInventory = true
+				}
+				continue
+			}
 			logTail, _ := c.Metadata["log_tail"].(string)
 			pkgsUpgraded := metadataInt(c.Metadata, "packages_upgraded")
 			actionPlanID := s.patchActionPlanIDForJob(ctx, jobID)
+			if atomicStore, ok := s.store.(interface {
+				CompletePatchJob(context.Context, storage.CompletePatchJobParams) (bool, error)
+			}); ok {
+				errMsg := strings.TrimSpace(c.Error)
+				if c.Status == "failed" && errMsg == "" {
+					errMsg = "agent reported failure"
+				}
+				changed, err := atomicStore.CompletePatchJob(ctx, storage.CompletePatchJobParams{NodeID: reportingNodeID, JobID: jobID, Action: c.Action, Succeeded: c.Status == "succeeded", PackagesUpgraded: pkgsUpgraded, LogTail: logTail, Error: errMsg})
+				if err != nil {
+					s.logger.Warn("atomic patch completion rejected", zap.Error(err), zap.String("job_id", jobID.String()))
+					continue
+				}
+				if !changed {
+					continue
+				}
+				rescan := c.Status == "succeeded" && s.patchJobRequestsPostPatchRescan(ctx, jobID)
+				if rescan {
+					requestFullInventory = true
+				}
+				if c.Status == "succeeded" {
+					s.recordPatchActionReceipt(ctx, actionPlanID, ps, jobID, storage.ActionPlanStateSucceeded, pkgsUpgraded, logTail, "", rescan)
+				} else {
+					s.recordPatchActionReceipt(ctx, actionPlanID, ps, jobID, storage.ActionPlanStateFailed, -1, logTail, errMsg, false)
+				}
+				s.maybeRollupPatchDeployment(ctx, ps.DeploymentID)
+				continue
+			}
 			if c.Status == "succeeded" {
 				if merr := s.store.MarkNodePatchApplied(ctx, ps.ID, pkgsUpgraded, logTail); merr != nil {
 					s.logger.Warn("mark patch applied",
@@ -1018,6 +1073,39 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, _ uuid.UU
 func agentUpdateAlreadyCurrent(errMsg string) bool {
 	msg := strings.ToLower(strings.TrimSpace(errMsg))
 	return strings.Contains(msg, "downgrade refused") && strings.Contains(msg, "<= current")
+}
+
+// A successful heartbeat is not an acknowledgment that a result was saved.
+// Read back both durable records and acknowledge only the matching terminal
+// result for the authenticated node. Old servers omit this field, so newer
+// agents retain results until a server capable of explicit acknowledgment runs.
+func (s *Server) persistedPatchCompletionAcknowledgments(ctx context.Context, nodeID uuid.UUID, completed []heartbeatCompletedAction) []string {
+	var acknowledged []string
+	for _, c := range completed {
+		if c.Action != JobTypePatchDeployDirect && c.Action != JobTypePatchDeployProxy && c.Action != JobTypePatchDeployAirgapped {
+			continue
+		}
+		id, err := uuid.Parse(c.JobID)
+		if err != nil {
+			continue
+		}
+		ps, err := s.store.GetNodePatchStateByJobID(ctx, id)
+		if err != nil || ps == nil || ps.NodeID != nodeID || ps.JobID == nil || *ps.JobID != id {
+			continue
+		}
+		job, err := s.store.GetJob(ctx, id)
+		if err != nil || job == nil || job.Type != c.Action || job.TenantID != ps.TenantID {
+			continue
+		}
+		var payload patchJobPayload
+		if json.Unmarshal(job.Payload, &payload) != nil || payload.NodeID != nodeID.String() || payload.DeploymentID != ps.DeploymentID.String() || payload.NodePatchStateID != ps.ID.String() {
+			continue
+		}
+		if (c.Status == "succeeded" && ps.Status == "applied" && job.Status == storage.JobStatusSucceeded) || (c.Status == "failed" && ps.Status == "failed" && job.Status == storage.JobStatusFailed) {
+			acknowledged = append(acknowledged, c.JobID)
+		}
+	}
+	return acknowledged
 }
 
 func (s *Server) processHeartbeatNetworkPolicyReceipts(ctx context.Context, node *storage.Node, receipts []heartbeatNetworkPolicyReceipt) {

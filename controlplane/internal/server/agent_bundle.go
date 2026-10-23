@@ -4,8 +4,10 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,7 +40,7 @@ info()  { echo -e "${BLUE}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fatal() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
-
+` + pinnedReleaseVerificationBash + `
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/control-one}"
@@ -63,6 +65,7 @@ fi
 
 BINARY="${SCRIPT_DIR}/controlone-agent"
 SIGNATURE="${SCRIPT_DIR}/controlone-agent.sig"
+PUBLIC_KEY="${SCRIPT_DIR}/signing-public-key.pem"
 MANIFEST="${SCRIPT_DIR}/manifest.json"
 CA_CERT="${SCRIPT_DIR}/ca.pem"
 AGENT_CONFIG="${SCRIPT_DIR}/config.yaml"
@@ -84,11 +87,24 @@ if command -v sha256sum >/dev/null 2>&1; then
     fi
 fi
 
+EXPECTED_SIG=$(sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST")
+if [[ -n "${CONTROLONE_SIGNING_PUBLIC_KEY:-}" ]] && [[ -z "$EXPECTED_SIG" ]]; then
+    fatal "Pinned release verification requires a signed manifest."
+fi
+if [[ -n "$EXPECTED_SIG" ]] && [[ ! -f "$SIGNATURE" ]]; then
+    fatal "Bundled signature missing."
+fi
 if [[ -f "$SIGNATURE" ]]; then
-    if "$BINARY" verify-binary --binary "$BINARY" --signature-file "$SIGNATURE" >/dev/null 2>&1; then
+    if [[ -n "${CONTROLONE_SIGNING_PUBLIC_KEY:-}" ]]; then
+        DETACHED_SIG=$(tr -d '\r\n' < "$SIGNATURE")
+        [[ "$DETACHED_SIG" == "$EXPECTED_SIG" ]] || fatal "Bundled signature metadata mismatch."
+        verify_pinned_release "$BINARY" "$DETACHED_SIG" "$CONTROLONE_SIGNING_PUBLIC_KEY" || fatal "Pinned release signature verification failed."
+        ok "Signature independently verified using the pinned release key."
+    elif [[ -f "$PUBLIC_KEY" ]] && "$BINARY" verify-binary --binary "$BINARY" --signature-file "$SIGNATURE" --public-key "$PUBLIC_KEY" >/dev/null 2>&1; then
         ok "Signature verified (ed25519, offline)."
     else
-        warn "Signature verification failed or skipped."
+        [[ -f "$PUBLIC_KEY" ]] || fatal "Bundled signing public key missing."
+        fatal "Signature verification failed or unavailable; installation stopped."
     fi
 fi
 
@@ -121,6 +137,7 @@ $ConfigDir  = if ($env:CONFIG_DIR)  { $env:CONFIG_DIR  } else { "$env:ProgramDat
 
 $Binary    = Join-Path $ScriptDir 'controlone-agent.exe'
 $Signature = Join-Path $ScriptDir 'controlone-agent.sig'
+$PublicKey = Join-Path $ScriptDir 'signing-public-key.pem'
 $Manifest  = Join-Path $ScriptDir 'manifest.json'
 $CACert    = Join-Path $ScriptDir 'ca.pem'
 $Config    = Join-Path $ScriptDir 'config.yaml'
@@ -138,13 +155,12 @@ if ($ManifestData.sha256) {
     Write-Host '[OK] Checksum verified (sha256).'
 }
 
+if ($ManifestData.signature -and -not (Test-Path $Signature)) { throw "Bundled signature missing." }
 if (Test-Path $Signature) {
-    try {
-        & $Binary verify-binary --binary $Binary --signature-file $Signature | Out-Null
-        Write-Host '[OK] Signature verified (ed25519, offline).'
-    } catch {
-        Write-Host '[WARN] Signature verification failed or skipped.'
-    }
+    if (-not (Test-Path $PublicKey)) { throw "Bundled signing public key missing." }
+    & $Binary verify-binary --binary $Binary --signature-file $Signature --public-key $PublicKey | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Signature verification failed (exit $LASTEXITCODE); installation stopped." }
+    Write-Host '[OK] Signature verified (ed25519, offline).'
 }
 
 if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null }
@@ -330,7 +346,16 @@ func (s *Server) handleAgentBundle(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, bundleEntry{name: "ca.pem", body: caPEM, mode: 0o644})
 	}
 	if meta.signature != "" {
-		// Embed the raw ed25519 signature bytes so offline verify can check without the manifest.
+		// Include the verifier input even when the public key was derived from
+		// the private key rather than loaded from a separate PEM file.
+		publicDER, err := x509.MarshalPKIXPublicKey(s.signingMaterial().publicKey)
+		if err != nil {
+			s.logger.Error("marshal offline signing public key", zap.Error(err))
+			http.Error(w, "signing public key unavailable", http.StatusInternalServerError)
+			return
+		}
+		entries = append(entries, bundleEntry{name: "signing-public-key.pem", body: pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER}), mode: 0o644})
+		// The detached signature is base64-encoded, as expected by verify-binary.
 		entries = append(entries, bundleEntry{name: binaryEntry + ".sig", body: []byte(meta.signature), mode: 0o644})
 	}
 

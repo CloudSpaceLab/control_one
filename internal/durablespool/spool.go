@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -28,12 +29,13 @@ type Options struct {
 }
 
 type Spool struct {
-	dir      string
-	prefix   string
-	maxBytes int64
-	fileMode os.FileMode
-	dirMode  os.FileMode
-	dropped  uint64
+	dir          string
+	prefix       string
+	maxBytes     int64
+	fileMode     os.FileMode
+	dirMode      os.FileMode
+	dropped      uint64
+	quarantineMu sync.Mutex
 }
 
 type Record struct {
@@ -42,10 +44,12 @@ type Record struct {
 }
 
 type Stats struct {
-	Records        int    `json:"records"`
-	Bytes          int64  `json:"bytes"`
-	MaxBytes       int64  `json:"max_bytes"`
-	DroppedRecords uint64 `json:"dropped_records"`
+	Records            int    `json:"records"`
+	Bytes              int64  `json:"bytes"`
+	MaxBytes           int64  `json:"max_bytes"`
+	DroppedRecords     uint64 `json:"dropped_records"`
+	QuarantinedRecords int    `json:"quarantined_records"`
+	QuarantinedBytes   int64  `json:"quarantined_bytes"`
 }
 
 func New(opts Options) (*Spool, error) {
@@ -180,7 +184,103 @@ func (s *Spool) Stats() (Stats, error) {
 	for _, record := range records {
 		stats.Bytes += record.Size
 	}
+	stats.QuarantinedRecords, stats.QuarantinedBytes, err = s.quarantineStats()
+	if err != nil {
+		return Stats{}, err
+	}
 	return stats, nil
+}
+
+func (s *Spool) quarantineStats() (int, int64, error) {
+	entries, err := os.ReadDir(filepath.Join(s.dir, "quarantine"))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, 0, nil
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	count := 0
+	var size int64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return 0, 0, err
+		}
+		size += info.Size()
+		if !strings.HasSuffix(entry.Name(), ".reason.json") {
+			count++
+		}
+	}
+	return count, size, nil
+}
+
+// Quarantine retains an unprocessable record outside the active queue. When
+// its separate bounded budget is full the record stays active; nothing is lost.
+func (s *Spool) Quarantine(record Record, reason string) (string, error) {
+	if s == nil {
+		return "", errors.New("spool is nil")
+	}
+	s.quarantineMu.Lock()
+	defer s.quarantineMu.Unlock()
+	path, err := s.cleanRecordPath(record.Path)
+	if err != nil {
+		return "", err
+	}
+	dir, err := filepath.Abs(s.dir)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Dir(path) != dir {
+		return "", errors.New("quarantine requires an active spool record")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	meta, err := json.Marshal(map[string]any{"reason": reason, "quarantined_at": time.Now().UTC()})
+	if err != nil {
+		return "", err
+	}
+	_, used, err := s.quarantineStats()
+	if err != nil {
+		return "", err
+	}
+	if used+info.Size()+int64(len(meta)) > s.maxBytes {
+		return "", errors.New("quarantine budget exhausted; record retained in active spool")
+	}
+	targetDir := filepath.Join(dir, "quarantine")
+	if err = os.MkdirAll(targetDir, s.dirMode); err != nil {
+		return "", err
+	}
+	target := filepath.Join(targetDir, filepath.Base(path))
+	if _, err = os.Stat(target); err == nil {
+		return "", errors.New("quarantine target already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	f, err := os.OpenFile(target+".reason.json", os.O_CREATE|os.O_EXCL|os.O_WRONLY, s.fileMode)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.Write(meta)
+	if err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(path, target)
+	}
+	if err != nil {
+		_ = os.Remove(target + ".reason.json")
+		return "", err
+	}
+	return target, nil
 }
 
 func (s *Spool) Read(record Record) ([]byte, error) {

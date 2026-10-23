@@ -5,6 +5,7 @@ import { Alert, EmptyState, KpiTile, Panel } from '@/components/kit';
 import { useApiClient } from '@/hooks/useApiClient';
 import { useTenant } from '@/providers/TenantProvider';
 import type { PatchDeploymentSummary } from '@/lib/api';
+import { PatchAssessmentNotice } from './PatchAssessmentNotice';
 
 export function AllTenantPatchSummary() {
   const api = useApiClient();
@@ -61,6 +62,8 @@ export function AllTenantPatchSummary() {
         </Alert>
       ) : null}
 
+      <PatchAssessmentNotice assessment={error ? undefined : summary?.assessment} />
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <KpiTile
           label="Fresh inventory"
@@ -73,14 +76,14 @@ export function AllTenantPatchSummary() {
           label="Known critical"
           value={summary?.known_critical_findings ?? '—'}
           hint={summary ? `${summary.known_kev_findings} KEV` : undefined}
-          tone={(summary?.known_critical_findings ?? 0) > 0 ? 'critical' : 'healthy'}
+          tone={(summary?.known_critical_findings ?? 0) > 0 ? 'critical' : 'unknown'}
           loading={loading}
         />
         <KpiTile
           label="Affected nodes"
           value={summary?.known_affected_nodes ?? '—'}
           hint={summary ? `${summary.known_active_findings} unresolved findings` : undefined}
-          tone={(summary?.known_affected_nodes ?? 0) > 0 ? 'warning' : 'healthy'}
+          tone={(summary?.known_affected_nodes ?? 0) > 0 ? 'warning' : 'unknown'}
           loading={loading}
         />
         <KpiTile label="In flight" value={summary ? inFlight : '—'} tone={inFlight > 0 ? 'warning' : 'healthy'} loading={loading} />

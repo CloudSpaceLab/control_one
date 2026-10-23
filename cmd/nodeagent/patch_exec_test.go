@@ -2,6 +2,22 @@ package main
 
 import "testing"
 
+func TestCountQuietAptUpgrades(t *testing.T) {
+	output := "Unpacking perl-base (5.38.2-3.2ubuntu0.6) over (5.38.2-3.2ubuntu0.4) ...\nSetting up perl-base (5.38.2-3.2ubuntu0.6) ...\n"
+	if got := countUpgradedPackages(output); got != 1 {
+		t.Fatalf("real quiet apt upgrade count=%d, want 1", got)
+	}
+	if got := countUpgradedPackages(output + output); got != 1 {
+		t.Fatalf("repeated package count=%d, want 1", got)
+	}
+	if got := countUpgradedPackages("Unpacking nano (7.2-2ubuntu0.2) ...\n"); got != 0 {
+		t.Fatalf("fresh install counted as upgrade: %d", got)
+	}
+	if got := countUpgradedPackages("0 upgraded, 0 newly installed, 0 to remove\n"); got != 0 {
+		t.Fatalf("no-op counted as upgrade: %d", got)
+	}
+}
+
 func TestCountUpgradableLines(t *testing.T) {
 	t.Parallel()
 

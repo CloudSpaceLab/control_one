@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -29,7 +30,8 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r)
+	if !ok {
 		return
 	}
 	if s.eventBus == nil {
@@ -74,6 +76,50 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if principal.Type == "agent" {
+		if s.store == nil {
+			http.Error(w, "storage unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		agentTenant, agentNode, err := s.tenantNodeForAgent(r.Context(), principal)
+		if err != nil || tenantID != agentTenant || nodeFilter == nil || *nodeFilter != agentNode {
+			http.Error(w, "agent stream must target its registered tenant and node", http.StatusForbidden)
+			return
+		}
+		if len(topics) == 0 {
+			http.Error(w, "agent stream requires explicit topics", http.StatusForbidden)
+			return
+		}
+		for _, topic := range topics {
+			if topic != eventbus.TopicPolicyUpdated && topic != eventbus.TopicRuleTriggered {
+				http.Error(w, "agent stream topic not allowed", http.StatusForbidden)
+				return
+			}
+		}
+	} else {
+		if _, ok := s.authorize(w, r, roleViewer); !ok {
+			return
+		}
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer) {
+			return
+		}
+	}
+
+	// Give each streaming write a bounded deadline. The ordinary HTTP write
+	// timeout otherwise terminates this long-lived connection between heartbeats.
+	controller := http.NewResponseController(w)
+	refreshDeadline := func() error {
+		err := controller.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		if errors.Is(err, http.ErrNotSupported) {
+			return nil
+		} // e.g. recorder tests
+		return err
+	}
+	if err := refreshDeadline(); err != nil {
+		http.Error(w, "stream deadline unavailable", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -94,12 +140,23 @@ func (s *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-keepAlive.C:
+			if err := refreshDeadline(); err != nil {
+				return
+			}
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
 		case ev, ok := <-sub.Ch:
 			if !ok {
+				return
+			}
+			// The bus also supports global broadcasts. This authenticated route
+			// delivers only explicitly tenant-scoped events.
+			if ev.TenantID != tenantID {
+				continue
+			}
+			if err := refreshDeadline(); err != nil {
 				return
 			}
 			if err := writeSSEEvent(w, ev); err != nil {

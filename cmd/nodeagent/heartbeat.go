@@ -82,6 +82,7 @@ type heartbeatAckResponse struct {
 	ApprovedLogSources     []approvedConnectorLogSourceDTO       `json:"approved_log_sources,omitempty"`
 	PendingActions         []string                              `json:"pending_actions,omitempty"`
 	FullInventoryRequested bool                                  `json:"full_inventory_requested,omitempty"`
+	AcknowledgedPatchJobs  []string                              `json:"acknowledged_patch_jobs,omitempty"`
 }
 
 // FilterApplier is invoked once per heartbeat with the controlplane-issued
@@ -218,6 +219,11 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 		log.Debug("decode heartbeat ack", zap.Error(err))
 		return nil
 	}
+	if agentPatchJournal != nil && len(ack.AcknowledgedPatchJobs) > 0 {
+		if err := agentPatchJournal.acknowledge(ack.AcknowledgedPatchJobs); err != nil {
+			log.Error("persist patch acknowledgment failed", zap.Error(err))
+		}
+	}
 
 	if ack.Activated {
 		log.Info("node activated by control plane", zap.String("state", ack.State))
@@ -348,6 +354,9 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 	// heartbeat. The server uses these to flip node_firewall_rules.status.
 	if drained := drainCompletedActions(); len(drained) > 0 {
 		payload.CompletedActions = drained
+	}
+	if agentPatchJournal != nil {
+		payload.CompletedActions = append(payload.CompletedActions, agentPatchJournal.pending()...)
 	}
 	if receipts := drainNetworkPolicyReceipts(); len(receipts) > 0 {
 		payload.NetworkPolicyReceipts = receipts

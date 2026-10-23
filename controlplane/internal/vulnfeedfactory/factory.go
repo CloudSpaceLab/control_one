@@ -411,9 +411,31 @@ type nvdCVSSMetric struct {
 }
 
 type nvdReferencesNode struct {
-	ReferenceData []struct {
-		URL string `json:"url"`
-	} `json:"referenceData"`
+	ReferenceData []nvdReference `json:"referenceData"`
+}
+
+type nvdReference struct {
+	URL string `json:"url"`
+}
+
+// NVD API 2.0 supplies references as an array. Also accept the legacy wrapper
+// used by previously exported inputs.
+func (n *nvdReferencesNode) UnmarshalJSON(data []byte) error {
+	var refs []nvdReference
+	if strings.HasPrefix(strings.TrimSpace(string(data)), "[") {
+		if err := json.Unmarshal(data, &refs); err != nil {
+			return err
+		}
+		n.ReferenceData = refs
+		return nil
+	}
+	type legacy nvdReferencesNode
+	var wrapped legacy
+	if err := json.Unmarshal(data, &wrapped); err != nil {
+		return err
+	}
+	*n = nvdReferencesNode(wrapped)
+	return nil
 }
 
 type nvdConfig struct {
@@ -757,9 +779,7 @@ func githubReferences(doc githubAdvisory) []string {
 	return uniqueStrings(append(doc.References, firstNonEmpty(doc.HTMLURL, doc.URL)))
 }
 
-func nvdReferences(refs []struct {
-	URL string `json:"url"`
-}) []string {
+func nvdReferences(refs []nvdReference) []string {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		out = append(out, ref.URL)

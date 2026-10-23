@@ -37,7 +37,7 @@ import (
 //
 //	case_no_policy_section_in_yaml — defaults no longer point at a phantom path
 //	case_yaml_explicit_empty_path  — explicit empty disables sig verification
-//	case_yaml_path_missing_file    — soft-fails instead of hard-failing
+//	case_yaml_path_missing_file    — rejects missing explicitly configured trust
 //	case_yaml_path_with_valid_key  — loads the key when the file exists
 //
 // Failure of any subtest means a regression in one of the three layers.
@@ -144,9 +144,7 @@ wizard:
 	})
 
 	t.Run("case_yaml_path_missing_file", func(t *testing.T) {
-		// Defense in depth — even if config points at a path that doesn't
-		// exist on disk (stale config, not-yet-provisioned key), boot must
-		// still succeed with sig verification disabled.
+		// Explicitly configured trust must never silently downgrade to unsigned.
 		missing := filepath.ToSlash(filepath.Join(t.TempDir(), "no_such_key.pem"))
 		cfg := loadYAML(t, fmt.Sprintf("\npolicy:\n  public_key_file: %q\n", missing))
 		if cfg.Policy.PublicKeyFile != missing {
@@ -156,8 +154,8 @@ wizard:
 			PublicKeyPath: cfg.Policy.PublicKeyFile,
 			MetadataPath:  cfg.Policy.MetadataFile,
 		})
-		if err != nil {
-			t.Fatalf("NewSyncer with missing file: %v (expected soft-fail)", err)
+		if err == nil {
+			t.Fatal("missing configured policy key must fail closed")
 		}
 	})
 

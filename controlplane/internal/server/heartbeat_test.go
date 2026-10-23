@@ -697,6 +697,9 @@ func TestHeartbeatPendingActionsUseJobTypePrefix(t *testing.T) {
 		proxyJobID:  {ID: proxyJobID, TenantID: tenantID, Type: JobTypePatchDeployProxy, Status: storage.JobStatusQueued},
 		airgapJobID: {ID: airgapJobID, TenantID: tenantID, Type: JobTypePatchDeployAirgapped, Status: storage.JobStatusQueued},
 	}
+	for _, job := range jobs {
+		job.Payload = []byte(fmt.Sprintf(`{"node_id":%q}`, nodeID.String()))
+	}
 
 	base := &fakeStore{
 		nodes: []storage.Node{{
@@ -996,7 +999,8 @@ func TestHeartbeatCompletedActionsAcceptAllPatchModes(t *testing.T) {
 			}
 			base := &fakeStore{
 				jobs: map[uuid.UUID]*storage.Job{
-					jobID: {ID: jobID, TenantID: tenantID, Type: mode, Status: storage.JobStatusRunning},
+					jobID: {ID: jobID, TenantID: tenantID, Type: mode, Status: storage.JobStatusRunning,
+						Payload: []byte(fmt.Sprintf(`{"node_id":%q,"deployment_id":%q,"node_patch_state_id":%q}`, nodeID, deploymentID, stateID))},
 				},
 			}
 			store := &patchCompletionStore{fakeStore: base, state: ps}
@@ -1019,6 +1023,64 @@ func TestHeartbeatCompletedActionsAcceptAllPatchModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPatchCompletionRejectsUntrustedIdentityAndDispatch(t *testing.T) {
+	for _, scenario := range []string{"wrong_node", "wrong_tenant", "wrong_action", "wrong_dispatch", "missing_payload", "invalid_status", "cancelled_job", "terminal_state"} {
+		t.Run(scenario, func(t *testing.T) {
+			tenantID, nodeID, deploymentID, stateID, jobID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+			ps := &storage.NodePatchState{ID: stateID, DeploymentID: deploymentID, NodeID: nodeID, TenantID: tenantID, Status: "pending", JobID: &jobID}
+			payload, err := json.Marshal(patchJobPayload{NodeID: nodeID.String(), DeploymentID: deploymentID.String(), NodePatchStateID: stateID.String()})
+			require.NoError(t, err)
+			job := &storage.Job{ID: jobID, TenantID: tenantID, Type: JobTypePatchDeployDirect, Status: storage.JobStatusRunning, Payload: payload}
+			reportingNode := nodeID
+			completion := heartbeatCompletedAction{Action: JobTypePatchDeployDirect, JobID: jobID.String(), Status: "succeeded"}
+			switch scenario {
+			case "wrong_node":
+				reportingNode = uuid.New()
+			case "wrong_tenant":
+				job.TenantID = uuid.New()
+			case "wrong_action":
+				job.Type = JobTypePatchDeployProxy
+			case "wrong_dispatch":
+				job.Payload = []byte(`{"node_id":"other-node"}`)
+			case "missing_payload":
+				job.Payload = nil
+			case "invalid_status":
+				completion.Status = "unknown"
+			case "cancelled_job":
+				job.Status = storage.JobStatusCancelled
+			case "terminal_state":
+				ps.Status = "failed"
+			}
+			base := &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: job}}
+			store := &patchCompletionStore{fakeStore: base, state: ps}
+			srv := &Server{logger: zap.NewNop(), store: store}
+			require.False(t, srv.processHeartbeatCompletedActions(context.Background(), reportingNode, []heartbeatCompletedAction{completion}))
+			require.Empty(t, store.appliedIDs)
+			if scenario != "cancelled_job" {
+				require.Equal(t, storage.JobStatusRunning, job.Status)
+			} else {
+				require.Equal(t, storage.JobStatusCancelled, job.Status)
+			}
+		})
+	}
+}
+
+func TestPatchCompletionAcknowledgmentRequiresPersistedOutcome(t *testing.T) {
+	tenantID, nodeID, stateID, deploymentID, jobID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	payload, _ := json.Marshal(patchJobPayload{NodeID: nodeID.String(), DeploymentID: deploymentID.String(), NodePatchStateID: stateID.String()})
+	ps := &storage.NodePatchState{ID: stateID, TenantID: tenantID, NodeID: nodeID, DeploymentID: deploymentID, JobID: &jobID, Status: "pending"}
+	job := &storage.Job{ID: jobID, TenantID: tenantID, Type: JobTypePatchDeployDirect, Status: storage.JobStatusRunning, Payload: payload}
+	store := &patchCompletionStore{fakeStore: &fakeStore{jobs: map[uuid.UUID]*storage.Job{jobID: job}}, state: ps}
+	srv := &Server{store: store, logger: zap.NewNop()}
+	completion := []heartbeatCompletedAction{{Action: job.Type, JobID: jobID.String(), Status: "succeeded"}}
+	require.Empty(t, srv.persistedPatchCompletionAcknowledgments(context.Background(), nodeID, completion))
+	ps.Status = "applied"
+	require.Empty(t, srv.persistedPatchCompletionAcknowledgments(context.Background(), nodeID, completion), "partial persistence must not acknowledge")
+	job.Status = storage.JobStatusSucceeded
+	require.Equal(t, []string{jobID.String()}, srv.persistedPatchCompletionAcknowledgments(context.Background(), nodeID, completion))
+	require.Empty(t, srv.persistedPatchCompletionAcknowledgments(context.Background(), uuid.New(), completion), "another node must not obtain acknowledgment")
 }
 
 func TestHeartbeatPersistsTargetMetadataObservations(t *testing.T) {

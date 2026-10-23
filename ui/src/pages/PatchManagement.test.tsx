@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => {
   const forceCloseMaintenanceWindow = vi.fn();
   const approvePatchApproval = vi.fn();
   const denyPatchApproval = vi.fn();
+  const listNodes = vi.fn();
+  const createPatchDeployment = vi.fn();
   const toastSuccess = vi.fn();
   const toastError = vi.fn();
 
@@ -27,12 +29,16 @@ const mocks = vi.hoisted(() => {
     forceCloseMaintenanceWindow,
     approvePatchApproval,
     denyPatchApproval,
+    listNodes,
+    createPatchDeployment,
     toastSuccess,
     toastError,
     currentTenantId: 'tenant-1' as string | null,
     tenantList: [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }],
     setCurrentTenantId: vi.fn(),
     apiClient: {
+      listNodes: (params: unknown) => listNodes(params),
+      createPatchDeployment: (payload: unknown) => createPatchDeployment(payload),
       getPatchSummary: (tenantId?: string) => getPatchSummary(tenantId),
       listPatchDeployments: (params: unknown) => listPatchDeployments(params),
       listSquidProxies: (tenantId: string) => listSquidProxies(tenantId),
@@ -118,6 +124,30 @@ const sampleApproval: PatchApproval = {
 };
 
 describe('PatchManagement', () => {
+  it('shows the planned proxy mode for historical auto deployments instead of the legacy direct header', async () => {
+    mocks.listPatchDeployments.mockResolvedValue({ deployments: [{ ...sampleDeployment, Mode: 'direct', Summary: { requested_mode: 'auto', waves: [{ nodes: [{ mode: 'proxy' }] }] } }] });
+    render(<PatchManagement />);
+    expect(await screen.findByText('auto (proxy)')).toBeInTheDocument();
+    expect(screen.queryByText('direct')).not.toBeInTheDocument();
+  });
+  it('does not label mixed auto deployments as a single transport', async () => {
+    mocks.listPatchDeployments.mockResolvedValue({ deployments: [{ ...sampleDeployment, Summary: { requested_mode: 'auto', waves: [{ nodes: [{ mode: 'proxy' }, { mode: 'direct' }] }] } }] });
+    render(<PatchManagement />);
+    expect(await screen.findByText('auto (per node)')).toBeInTheDocument();
+  });
+  it('sends only the selected node and explicit package scope with a post-patch inventory refresh', async () => {
+    const user = userEvent.setup();
+    mocks.listNodes.mockResolvedValue({ data: [{ id: 'lab-node', hostname: 'ubuntu-lab', state: 'active', os: 'ubuntu' }] });
+    mocks.createPatchDeployment.mockResolvedValue({ node_count: 1 });
+    render(<PatchManagement />);
+    await user.click(await screen.findByRole('button', { name: 'Deploy patches…' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Select node ubuntu-lab' }));
+    await user.type(screen.getByRole('textbox', { name: /Package allowlist/ }), 'perl-base, perl-base');
+    await user.click(screen.getByRole('button', { name: 'Deploy to 1 node' }));
+    await waitFor(() => expect(mocks.createPatchDeployment).toHaveBeenCalledWith(expect.objectContaining({
+      tenant_id: 'tenant-1', node_ids: ['lab-node'], package_allowlist: ['perl-base'], post_patch_rescan: true,
+    })));
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.currentTenantId = 'tenant-1';
@@ -162,6 +192,15 @@ describe('PatchManagement', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it.each(['partial', 'expired', 'unavailable'] as const)('shows %s assessment without treating zero findings as clean', async (status) => {
+    const summary = await mocks.getPatchSummary();
+    mocks.getPatchSummary.mockResolvedValue({ ...summary, assessment: { status, feed_count: status === 'partial' ? 1 : 0, coverage: 'unknown' } });
+    render(<PatchManagement />);
+    const title = status === 'partial' ? 'Assessment coverage is partial' : status === 'expired' ? 'Vulnerability feed expired' : 'Assessment status unavailable';
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(screen.getByText(/Zero known findings does not establish/)).toBeInTheDocument();
   });
 
   it('shows exact all-tenant patch totals and requires tenant selection before changes', async () => {

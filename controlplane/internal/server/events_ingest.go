@@ -235,6 +235,7 @@ func (s *Server) handleEventsIngest(w http.ResponseWriter, r *http.Request) {
 
 	events, err := decodeIngestedEventPayload(rawBytes, r.Header.Get("Content-Encoding"), maxEventIngestDecompressed, maxEventIngestRows)
 	if err != nil {
+		s.logger.Warn("event ingest rejected", zap.String("node_id", nodeID.String()), zap.Error(err))
 		status := http.StatusBadRequest
 		if errors.Is(err, errEventIngestTooManyRows) {
 			status = http.StatusRequestEntityTooLarge
