@@ -1,5 +1,7 @@
 # Phase 2 correct-state implementation — 27 October 2026
 
+> **Fresh live demonstration, 29 October 2026:** New app-approved deployment b4e48dd8 completed APPLIED / PKGS 0; later assessment 4788a20d produced verification unknown (no security baseline), with promotion blocked. Signed repository refresh, isolated security/reconciliation tests and fresh live-database restoration passed. The temporary proxy ACL was repaired for the changed lab IP; original direct/no-proxy settings were restored. [Exact steps, evidence and pending gates](patch-posture-self-service-recovery-guide.md#fresh-live-workflow-demonstration--29-october-2026). Phase acceptance is unchanged; remaining host/platform/production gates stay open.
+
 > **Current Phase 2 qualification, 28 October 2026:** P2-01 through P2-10 software-contract checks are qualified using the existing Ubuntu lab and isolated tests. [Implementation, test evidence, live demonstration and scope limits](patch-posture-phase2-state-2026-10-27.md#complete-state-contract-qualification--28-october-2026). Full-host reboot/platform, external recovery, managed production trust and production rollout gates remain open in their respective phases. Earlier checkpoints below are historical; use the [canonical acceptance checklist](patch-posture-phase-acceptance.md) for current status.
 
 ## Complete state-contract qualification — 28 October 2026
