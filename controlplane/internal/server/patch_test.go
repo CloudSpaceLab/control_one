@@ -25,8 +25,13 @@ import (
 // state-tracking the rest of the suite doesn't need.
 type patchTestStore struct {
 	*fakeStore
-	deployments map[uuid.UUID]*storage.PatchDeployment
-	states      []storage.NodePatchState
+	deployments  map[uuid.UUID]*storage.PatchDeployment
+	states       []storage.NodePatchState
+	verifiedJobs map[uuid.UUID]bool
+}
+
+func (s *patchTestStore) PatchVerificationAllowsPromotion(_ context.Context, id uuid.UUID) (bool, error) {
+	return s.verifiedJobs[id], nil
 }
 
 func newPatchTestStore(tenantID, nodeID uuid.UUID) *patchTestStore {
@@ -636,6 +641,13 @@ func TestPatchDeploy_CanaryWaveAdvanceAndPackagePolicy(t *testing.T) {
 	}
 
 	store.states[0].Status = "applied"
+	blockedReq := withPrincipal(httptest.NewRequest(http.MethodPost, "/api/v1/patch/deployments/"+resp.Deployment.ID.String()+"/advance", nil), patchOperatorPrincipal())
+	blockedRec := httptest.NewRecorder()
+	srv.handlePatchDeploymentSubroute(blockedRec, blockedReq)
+	if blockedRec.Code != http.StatusConflict || len(store.states) != 1 {
+		t.Fatalf("unverified installation advanced wave: %d %s", blockedRec.Code, blockedRec.Body.String())
+	}
+	store.verifiedJobs = map[uuid.UUID]bool{*store.states[0].JobID: true}
 	advanceReq := httptest.NewRequest(http.MethodPost, "/api/v1/patch/deployments/"+resp.Deployment.ID.String()+"/advance", nil)
 	advanceReq = withPrincipal(advanceReq, patchOperatorPrincipal())
 	advanceRec := httptest.NewRecorder()

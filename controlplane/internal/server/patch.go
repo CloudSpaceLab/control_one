@@ -139,6 +139,9 @@ type patchDeployResponse struct {
 }
 
 type patchPackagePolicy struct {
+	approvalID       uuid.UUID
+	approvalHash     string
+	approverID       uuid.UUID
 	approvedProxyURL string
 	Allowlist        []string `json:"allowlist,omitempty"`
 	Denylist         []string `json:"denylist,omitempty"`
@@ -357,7 +360,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 				"node_id": nid.String(),
 				"reason":  gate.Reason,
 			})
-			if err := s.store.MarkNodePatchFailed(r.Context(), state.ID, "safety gate blocked: "+gate.Reason, ""); err != nil {
+			if err := s.markUnlinkedPatchDispatchFailed(r.Context(), state.ID, "safety gate blocked: "+gate.Reason, ""); err != nil {
 				s.logger.Warn("mark safety-gated patch node failed", zap.Error(err), zap.String("node_id", nid.String()))
 			}
 			s.logger.Info("patch deploy blocked by safety gate",
@@ -368,7 +371,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		}
 
 		if _, err := s.dispatchPatchModeToNode(r.Context(), tenantID, deployment.ID, nid, nodeMode, proxyID, windowID, policy); err != nil {
-			if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, err.Error(), ""); markErr != nil {
+			if markErr := s.markUnlinkedPatchDispatchFailed(r.Context(), state.ID, err.Error(), ""); markErr != nil {
 				s.logger.Warn("mark patch dispatch failed", zap.Error(markErr), zap.String("node_id", nid.String()))
 			}
 			failed = append(failed, map[string]string{
@@ -391,7 +394,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 	// status so the schema check constraint stays valid.
 	switch {
 	case len(succeeded) > 0:
-		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "in_progress", false)
+		s.maybeRollupPatchDeployment(r.Context(), deployment.ID)
 	case len(awaiting) > 0:
 		// At least one target is still actionable, so the deployment is not
 		// terminal even when another target was blocked or failed.
@@ -837,6 +840,23 @@ func (s *Server) handleListPatchDeploymentNodes(w http.ResponseWriter, r *http.R
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	if verifications, ok := s.store.(interface {
+		ListNodePatchVerifications(context.Context, uuid.UUID, uuid.UUID) ([]storage.PatchVerification, error)
+	}); ok {
+		for i := range rows {
+			saved, loadErr := verifications.ListNodePatchVerifications(r.Context(), rows[i].TenantID, rows[i].NodeID)
+			if loadErr != nil {
+				http.Error(w, "verification unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			for _, v := range saved {
+				if rows[i].JobID != nil && v.JobID == *rows[i].JobID {
+					copy := v
+					rows[i].Verification = &copy
+				}
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, struct {
 		Rows []storage.NodePatchState `json:"rows"`
 	}{Rows: rows})
@@ -922,15 +942,71 @@ func (s *Server) handleAdvancePatchDeployment(w http.ResponseWriter, r *http.Req
 	if !s.requireTenantAccess(w, r, principal, deployment.TenantID, roleOperator, roleAdmin) {
 		return
 	}
+	if locker, ok := s.store.(interface {
+		AcquirePatchDeploymentDispatch(context.Context, uuid.UUID) (func(), bool, error)
+	}); ok {
+		release, acquired, err := locker.AcquirePatchDeploymentDispatch(r.Context(), deploymentID)
+		if err != nil {
+			http.Error(w, "wave dispatch lock unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !acquired {
+			http.Error(w, "another wave advance is in progress", http.StatusConflict)
+			return
+		}
+		defer release()
+	}
 	rows, err := s.store.ListNodePatchStatesForDeployment(r.Context(), deploymentID)
 	if err != nil {
 		s.logger.Error("list patch states for advance", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
+	// An operator can reconcile a crashed unlinked dispatch even when its
+	// node is offline. Current approvals and fresh intents remain pending.
+	if recovery, ok := s.store.(interface {
+		ReconcileIncompletePatchDispatches(context.Context, uuid.UUID) (int, error)
+	}); ok {
+		repaired := 0
+		for _, row := range rows {
+			if row.Status == "pending" && row.JobID == nil {
+				count, err := recovery.ReconcileIncompletePatchDispatches(r.Context(), row.NodeID)
+				if err != nil {
+					http.Error(w, "dispatch recovery unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				repaired += count
+			}
+		}
+		if repaired > 0 {
+			rows, err = s.store.ListNodePatchStatesForDeployment(r.Context(), deploymentID)
+			if err != nil {
+				http.Error(w, "cannot reload recovered dispatch", http.StatusServiceUnavailable)
+				return
+			}
+		}
+	}
 	if pending, failed := patchWavePendingFailed(rows); pending > 0 || failed > 0 {
 		http.Error(w, fmt.Sprintf("cannot advance while previous wave has %d pending and %d failed nodes", pending, failed), http.StatusConflict)
 		return
+	}
+	for _, row := range rows {
+		checker, ok := s.store.(interface {
+			PatchVerificationAllowsPromotion(context.Context, uuid.UUID) (bool, error)
+		})
+		if !ok || row.JobID == nil {
+			http.Error(w, "prior wave lacks authoritative fix verification", http.StatusConflict)
+			return
+		}
+		ready, checkErr := checker.PatchVerificationAllowsPromotion(r.Context(), *row.JobID)
+		if checkErr != nil {
+			http.Error(w, "verification gate unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !ready {
+			http.Error(w, "prior wave requires verified fix/removal, current health and reboot evidence", http.StatusConflict)
+			return
+		}
 	}
 	plan := patchPlanFromDeployment(deployment)
 	if len(plan.Waves) == 0 {
@@ -944,7 +1020,7 @@ func (s *Server) handleAdvancePatchDeployment(w http.ResponseWriter, r *http.Req
 	}
 	result := s.dispatchPatchPlanWave(r.Context(), deployment.TenantID, deployment.ID, plan, nextWave)
 	if len(result.Succeeded) > 0 {
-		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), deployment.ID, "in_progress", false)
+		s.maybeRollupPatchDeployment(r.Context(), deployment.ID)
 	}
 	s.recordAudit(r.Context(), principal, deployment.TenantID, "patch.deploy.wave_advanced", "patch_deployment", deployment.ID.String(), map[string]any{
 		"wave_number":       result.WaveNumber,
@@ -1339,6 +1415,14 @@ func (s *Server) dispatchPatchPlanWave(ctx context.Context, tenantID, deployment
 			result.Failed = append(result.Failed, map[string]string{"node_id": nid.String(), "error": errMsg})
 			continue
 		}
+		if state.JobID != nil {
+			result.Succeeded = append(result.Succeeded, nid.String())
+			continue
+		}
+		if state.Status != "pending" {
+			result.Failed = append(result.Failed, map[string]string{"node_id": nid.String(), "error": "patch state already terminal; reconciliation required"})
+			continue
+		}
 		nodeMode, proxyID, windowID := s.resolvePatchModeForNode(ctx, nid, plan.RequestedMode)
 		gate := s.runPatchSafetyGates(ctx, tenantID, nid, deploymentID, nodeMode, proxyID, windowID)
 		switch {
@@ -1351,13 +1435,13 @@ func (s *Server) dispatchPatchPlanWave(ctx context.Context, tenantID, deployment
 			continue
 		case !gate.Allowed:
 			result.GateBlocked = append(result.GateBlocked, map[string]string{"node_id": nid.String(), "reason": gate.Reason})
-			if err := s.store.MarkNodePatchFailed(ctx, state.ID, "safety gate blocked: "+gate.Reason, ""); err != nil {
+			if err := s.markUnlinkedPatchDispatchFailed(ctx, state.ID, "safety gate blocked: "+gate.Reason, ""); err != nil {
 				s.logger.Warn("mark safety-gated patch node failed", zap.Error(err), zap.String("node_id", nid.String()))
 			}
 			continue
 		}
 		if _, err := s.dispatchPatchModeToNode(ctx, tenantID, deploymentID, nid, nodeMode, proxyID, windowID, policy); err != nil {
-			if markErr := s.store.MarkNodePatchFailed(ctx, state.ID, err.Error(), ""); markErr != nil {
+			if markErr := s.markUnlinkedPatchDispatchFailed(ctx, state.ID, err.Error(), ""); markErr != nil {
 				s.logger.Warn("mark patch dispatch failed", zap.Error(markErr), zap.String("node_id", nid.String()))
 			}
 			result.Failed = append(result.Failed, map[string]string{"node_id": nid.String(), "error": err.Error()})
@@ -1366,6 +1450,15 @@ func (s *Server) dispatchPatchPlanWave(ctx context.Context, tenantID, deployment
 		result.Succeeded = append(result.Succeeded, nid.String())
 	}
 	return result
+}
+
+func (s *Server) markUnlinkedPatchDispatchFailed(ctx context.Context, id uuid.UUID, reason, logTail string) error {
+	if safe, ok := s.store.(interface {
+		MarkUnlinkedPatchDispatchFailed(context.Context, uuid.UUID, string, string) error
+	}); ok {
+		return safe.MarkUnlinkedPatchDispatchFailed(ctx, id, reason, logTail)
+	}
+	return s.store.MarkNodePatchFailed(ctx, id, reason, logTail)
 }
 
 // dispatchPatchModeToNode chooses the job type based on the resolved per-node
@@ -1401,9 +1494,6 @@ func (s *Server) dispatchPatchModeToNode(
 		PackageDenylist:  policy.Denylist,
 		PostPatchRescan:  policy.PostPatchRescan,
 	}
-	if actionPlanID := s.createPatchNodeActionPlan(ctx, tenantID, deploymentID, state.ID, nodeID, mode, policy); actionPlanID != uuid.Nil {
-		payload.ActionPlanID = actionPlanID.String()
-	}
 	switch mode {
 	case patchModeProxy:
 		jobType = JobTypePatchDeployProxy
@@ -1435,6 +1525,18 @@ func (s *Server) dispatchPatchModeToNode(
 		return state, fmt.Errorf("unsupported patch mode %q", mode)
 	}
 	_ = windowID // window association is recorded on the deployment summary; firewall opens happen via JobTypePatchOpenWindow.
+	if atomic, ok := s.store.(interface {
+		DispatchPatchJob(context.Context, storage.DispatchPatchJobParams) (*storage.NodePatchState, error)
+	}); ok {
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return state, err
+		}
+		return atomic.DispatchPatchJob(ctx, storage.DispatchPatchJobParams{TenantID: tenantID, DeploymentID: deploymentID, NodeID: nodeID, Mode: mode, Payload: raw, Plan: patchNodeActionPlanParams(tenantID, deploymentID, state.ID, nodeID, mode, policy), ApprovalID: policy.approvalID, PolicyHash: policy.approvalHash, ApproverID: policy.approverID})
+	}
+	if actionPlanID := s.createPatchNodeActionPlan(ctx, tenantID, deploymentID, state.ID, nodeID, mode, policy); actionPlanID != uuid.Nil {
+		payload.ActionPlanID = actionPlanID.String()
+	}
 
 	payloadBytes, _ := json.Marshal(payload)
 	job := &storage.Job{

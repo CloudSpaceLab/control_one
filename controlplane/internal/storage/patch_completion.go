@@ -17,6 +17,7 @@ type CompletePatchJobParams struct {
 	PackagesUpgraded int
 	LogTail          string
 	Error            string
+	Health           json.RawMessage
 }
 
 // CompletePatchJob atomically validates dispatch ownership and terminalizes both
@@ -37,16 +38,20 @@ func (s *Store) CompletePatchJob(ctx context.Context, p CompletePatchJobParams) 
 	var stateID, deploymentID, stateTenant, jobTenant uuid.UUID
 	var stateStatus, jobStatus, jobType string
 	var payload []byte
-	err = tx.QueryRowContext(ctx, `SELECT p.id,p.deployment_id,p.tenant_id,p.status,j.tenant_id,j.status,j.type,j.payload
+	var savedPackages int
+	var savedLog, savedError string
+	err = tx.QueryRowContext(ctx, `SELECT p.id,p.deployment_id,p.tenant_id,p.status,j.tenant_id,j.status,j.type,j.payload,COALESCE(p.packages_upgraded,0),COALESCE(p.log_tail,''),COALESCE(p.error,'')
 		FROM node_patch_state p JOIN jobs j ON j.id=p.job_id
-		WHERE p.job_id=$1 AND p.node_id=$2 FOR UPDATE OF p,j`, p.JobID, p.NodeID).Scan(&stateID, &deploymentID, &stateTenant, &stateStatus, &jobTenant, &jobStatus, &jobType, &payload)
+		WHERE p.job_id=$1 AND p.node_id=$2 FOR UPDATE OF p,j`, p.JobID, p.NodeID).Scan(&stateID, &deploymentID, &stateTenant, &stateStatus, &jobTenant, &jobStatus, &jobType, &payload, &savedPackages, &savedLog, &savedError)
 	if err != nil {
 		return false, fmt.Errorf("load owned patch dispatch: %w", err)
 	}
 	var dispatch struct {
-		NodeID       string `json:"node_id"`
-		DeploymentID string `json:"deployment_id"`
-		StateID      string `json:"node_patch_state_id"`
+		NodeID          string `json:"node_id"`
+		DeploymentID    string `json:"deployment_id"`
+		StateID         string `json:"node_patch_state_id"`
+		ActionPlanID    string `json:"action_plan_id"`
+		PostPatchRescan bool   `json:"post_patch_rescan"`
 	}
 	if json.Unmarshal(payload, &dispatch) != nil || stateTenant != jobTenant || jobType != p.Action || dispatch.NodeID != p.NodeID.String() || dispatch.DeploymentID != deploymentID.String() || dispatch.StateID != stateID.String() {
 		return false, errors.New("patch dispatch ownership mismatch")
@@ -56,7 +61,21 @@ func (s *Store) CompletePatchJob(ctx context.Context, p CompletePatchJobParams) 
 		wantState, wantJob = "applied", JobStatusSucceeded
 	}
 	if stateStatus == wantState && jobStatus == string(wantJob) {
-		return false, nil
+		var ready bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM patch_completion_effects WHERE job_id=$1)`, p.JobID).Scan(&ready); err != nil {
+			return false, err
+		}
+		if ready {
+			return false, nil
+		}
+		// Reconcile a legacy/interrupted completion from persisted evidence, never
+		// from a retry's potentially changed package count or log.
+		p.PackagesUpgraded, p.LogTail, p.Error = savedPackages, savedLog, savedError
+		p.Health = nil // Changed retry metadata cannot certify legacy execution health.
+		if err := s.completePatchEffects(ctx, tx, p, stateID, deploymentID, stateTenant, dispatch.ActionPlanID, dispatch.PostPatchRescan); err != nil {
+			return false, err
+		}
+		return false, tx.Commit()
 	}
 	if stateStatus != "pending" || jobStatus == string(JobStatusCancelled) || jobStatus == string(JobStatusFailed) || jobStatus == string(JobStatusSucceeded) {
 		return false, errors.New("patch dispatch already terminal or cancelled")
@@ -74,6 +93,9 @@ func (s *Store) CompletePatchJob(ctx context.Context, p CompletePatchJobParams) 
 		return false, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,status,message,created_at) VALUES($1,$2,$3,$4,$5)`, uuid.New(), p.JobID, wantJob, "agent patch completion committed", now); err != nil {
+		return false, err
+	}
+	if err = s.completePatchEffects(ctx, tx, p, stateID, deploymentID, stateTenant, dispatch.ActionPlanID, dispatch.PostPatchRescan); err != nil {
 		return false, err
 	}
 	if err = tx.Commit(); err != nil {

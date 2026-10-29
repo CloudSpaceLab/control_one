@@ -1,0 +1,1 @@
+DROP TABLE node_update_candidate_observations;

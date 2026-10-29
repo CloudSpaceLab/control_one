@@ -51,9 +51,19 @@ func (s *Store) ReplaceNodePackages(ctx context.Context, nodeID uuid.UUID, packa
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var owner uuid.UUID
+	if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM nodes WHERE id=$1 FOR UPDATE`, nodeID).Scan(&owner); err != nil {
+		return fmt.Errorf("lock inventory node: %w", err)
+	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM node_packages WHERE node_id = $1`, nodeID); err != nil {
 		return fmt.Errorf("delete node packages: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE node_inventory_sync SET snapshot=NULL WHERE node_id=$1`, nodeID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE nodes SET inventory_revision=inventory_revision+1 WHERE id=$1`, nodeID); err != nil {
+		return err
 	}
 
 	if len(packages) > 0 {
@@ -147,7 +157,16 @@ func (s *Store) UpsertNodeInventorySync(ctx context.Context, sync NodeInventoryS
 	if sync.LastSeenAt.IsZero() {
 		sync.LastSeenAt = now
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var nodeID uuid.UUID
+	if err = tx.QueryRowContext(ctx, `UPDATE nodes SET inventory_revision=inventory_revision+1 WHERE id=$1 RETURNING id`, sync.NodeID).Scan(&nodeID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO node_inventory_sync
 			(node_id, package_hash, package_count, kernel_version, os_version, last_full_sync, last_seen_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -158,6 +177,7 @@ func (s *Store) UpsertNodeInventorySync(ctx context.Context, sync NodeInventoryS
 			os_version     = EXCLUDED.os_version,
 			last_full_sync = EXCLUDED.last_full_sync,
 			last_seen_at   = EXCLUDED.last_seen_at
+			,snapshot = NULL
 	`,
 		sync.NodeID, sync.PackageHash, sync.PackageCount,
 		sync.KernelVersion, sync.OSVersion, sync.LastFullSync, sync.LastSeenAt,
@@ -165,7 +185,7 @@ func (s *Store) UpsertNodeInventorySync(ctx context.Context, sync NodeInventoryS
 	if err != nil {
 		return fmt.Errorf("upsert node inventory sync: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // TouchNodeInventorySync updates only last_seen_at — used when the agent

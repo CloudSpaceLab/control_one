@@ -44,10 +44,18 @@ func (s *Store) ReplaceNodeAppDependencies(ctx context.Context, nodeID, tenantID
 		return fmt.Errorf("begin app dependencies tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var owner uuid.UUID
+	if err := tx.QueryRowContext(ctx, `SELECT tenant_id FROM nodes WHERE id=$1 FOR UPDATE`, nodeID).Scan(&owner); err != nil {
+		return fmt.Errorf("lock dependency node: %w", err)
+	}
+	if owner != tenantID {
+		return errors.New("dependency node/tenant mismatch")
+	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM node_app_dependencies WHERE node_id = $1`, nodeID); err != nil {
 		return fmt.Errorf("delete node app dependencies: %w", err)
 	}
+	if _,err:=tx.ExecContext(ctx,`UPDATE nodes SET inventory_revision=inventory_revision+1 WHERE id=$1`,nodeID);err!=nil{return err}
 	if len(deps) > 0 {
 		stmt, err := tx.PrepareContext(ctx, `
 			INSERT INTO node_app_dependencies (

@@ -3,12 +3,12 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -120,25 +120,19 @@ func TestHandleNodeAppDependenciesTriggersVulnerabilityRescan(t *testing.T) {
 		}},
 	}
 	root := t.TempDir()
-	activeDir := filepath.Join(root, "active", offlinebundle.ContentTypeVulnerabilityFeed)
-	if err := os.MkdirAll(activeDir, 0o755); err != nil {
-		t.Fatalf("mkdir active feed: %v", err)
+	now := time.Now().UTC()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(activeDir, "app-feed.json"), []byte(`{
-		"schema_version":1,
-		"source":"unit-test",
-		"advisories":[{
-			"cve_id":"CVE-2026-5000",
-			"severity":"high",
-			"affected_packages":[{
-				"name":"pkg:npm/express@4.18.2",
-				"source":"purl",
-				"version_range":"< 4.18.3",
-				"fixed_version":"4.18.3"
-			}]
-		}]
-	}`), 0o644); err != nil {
-		t.Fatalf("write feed: %v", err)
+	feed := offlinebundle.VulnerabilityFeed{SchemaVersion: 1, Source: "unit-test", Advisories: []offlinebundle.VulnerabilityAdvisory{{
+		CVEID: "CVE-2026-5000", Severity: "high", AffectedPackages: []offlinebundle.VulnerabilityAffectedPkg{{
+			Name: "pkg:npm/express@4.18.2", Source: "purl", VersionScheme: "semver", VersionRange: "< 4.18.3", FixedVersion: "4.18.3",
+		}},
+	}}}
+	bundle := makeServerVulnerabilityBundleWithFeed(t, priv, "dependency-rescan", "1", 1, now, feed)
+	if _, err := offlinebundle.Import(context.Background(), bytes.NewReader(bundle), offlinebundle.ImportOptions{RootDir: root, PublicKey: pub, Now: now}); err != nil {
+		t.Fatal(err)
 	}
 	srv := New(zap.NewNop(), &config.Config{HTTP: config.HTTPConfig{Address: ":0"}}, store, &stubQueue{})
 	srv.offlineContentRoot = root

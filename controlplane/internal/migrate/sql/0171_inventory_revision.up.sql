@@ -1,0 +1,1 @@
+ALTER TABLE nodes ADD COLUMN inventory_revision BIGINT NOT NULL DEFAULT 0;

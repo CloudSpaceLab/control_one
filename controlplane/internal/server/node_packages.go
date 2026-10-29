@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/packageinventory"
 )
 
 // nodePackageResponse is the wire representation of a single node_packages row.
@@ -56,7 +58,8 @@ func (s *Server) handleNodePackages(w http.ResponseWriter, r *http.Request, node
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleViewer); !ok {
+	principal, ok := s.authorize(w, r, roleViewer)
+	if !ok {
 		return
 	}
 	if s.store == nil {
@@ -74,6 +77,9 @@ func (s *Server) handleNodePackages(w http.ResponseWriter, r *http.Request, node
 		http.NotFound(w, r)
 		return
 	}
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleViewer, roleOperator, roleInvestigator, roleAdmin) {
+		return
+	}
 
 	pkgs, err := s.store.ListNodePackages(r.Context(), nodeID)
 	if err != nil {
@@ -85,5 +91,39 @@ func (s *Server) handleNodePackages(w http.ResponseWriter, r *http.Request, node
 	for _, p := range pkgs {
 		out = append(out, newNodePackageResponse(p))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": out})
+	assessment, err := s.latestNodeAssessment(r.Context(), node)
+	if err != nil {
+		s.logger.Error("get node assessment", zap.Error(err))
+		http.Error(w, "assessment unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var verification []storage.PatchVerification
+	if reader, ok := s.store.(interface {
+		ListNodePatchVerifications(context.Context, uuid.UUID, uuid.UUID) ([]storage.PatchVerification, error)
+	}); ok {
+		verification, err = reader.ListNodePatchVerifications(r.Context(), node.TenantID, node.ID)
+		if err != nil {
+			http.Error(w, "patch verification unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	candidates, err := s.nodeUpdateCandidates(r.Context(), node, pkgs)
+	if err != nil {
+		http.Error(w, "candidate evidence unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var hostHealth any
+	if reader, ok := s.store.(interface {
+		GetNodePatchHealth(context.Context, uuid.UUID) (*packageinventory.Health, error)
+	}); ok {
+		health, readErr := reader.GetNodePatchHealth(r.Context(), node.ID)
+		if readErr != nil {
+			http.Error(w, "host health evidence unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if health != nil {
+			hostHealth = map[string]any{"evidence": health, "current": !health.ObservedAt.After(time.Now().UTC()) && time.Since(health.ObservedAt) <= 5*time.Minute}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": out, "assessment": assessment, "patch_verifications": verification, "update_candidates": candidates, "patch_health": hostHealth})
 }

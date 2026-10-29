@@ -203,6 +203,7 @@ func (s *Store) GetPatchDeploymentSummary(ctx context.Context, tenantIDs []uuid.
 }
 
 type NodePatchState struct {
+	Verification     *PatchVerification `json:"Verification,omitempty"`
 	ID               uuid.UUID
 	DeploymentID     uuid.UUID
 	NodeID           uuid.UUID

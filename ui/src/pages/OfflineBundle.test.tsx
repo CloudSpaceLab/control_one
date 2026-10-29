@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act, within } from '@testing-library/react';
+import { render, screen, waitFor, act, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ReactNode } from 'react';
 import { OfflineBundle } from './OfflineBundle';
@@ -58,7 +58,7 @@ const sampleContentBundle: OfflineContentBundle = {
   imported_at: '2026-06-08T00:00:00Z',
 };
 
-function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBundleDownloadUrl' | 'listOfflineContentBundles' | 'importOfflineContentBundle' | 'rollbackOfflineContentBundle'> {
+function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBundleDownloadUrl' | 'downloadAgentBundle' | 'listOfflineContentBundles' | 'importOfflineContentBundle' | 'rollbackOfflineContentBundle'> {
   return {
     listEnrollmentTokens: vi.fn().mockResolvedValue({
       data: sampleTokens,
@@ -74,6 +74,7 @@ function makeApiClientStub(): Pick<APIClient, 'listEnrollmentTokens' | 'buildBun
     buildBundleDownloadUrl: vi.fn((options: { os: string; arch: string; token: string }) => {
       return `https://cp.example.com/api/v1/agent/bundle?os=${options.os}&arch=${options.arch}&token=${options.token}`;
     }),
+    downloadAgentBundle: vi.fn().mockResolvedValue({ blob: new Blob(['fixture']), filename: 'controlone-bundle-linux-amd64.tar.gz' }),
     listOfflineContentBundles: vi.fn().mockResolvedValue({
       items: [],
       pagination: { total: 0, count: 0, limit: 25, offset: 0, nextOffset: null, prevOffset: null },
@@ -109,6 +110,9 @@ describe('OfflineBundle', () => {
 
     api = makeApiClientStub();
     vi.spyOn(useApiClientModule, 'useApiClient').mockReturnValue(api as unknown as APIClient);
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn().mockReturnValue('blob:offline-fixture') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
     windowLocationAssign = vi.fn();
     originalLocation = window.location;
@@ -119,6 +123,7 @@ describe('OfflineBundle', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     Object.defineProperty(window, 'location', {
       configurable: true,
       value: originalLocation,
@@ -136,6 +141,62 @@ describe('OfflineBundle', () => {
     expect(api.listEnrollmentTokens).toHaveBeenCalledWith({ tenant_id: 'tenant-a', limit: 50, offset: 0 });
     expect(screen.getByRole('option', { name: /prod-fleet/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /revoked-fleet/i })).toBeDisabled();
+  });
+
+  it('labels and disables unusable tokens and selects a usable token instead', async () => {
+    vi.mocked(api.listEnrollmentTokens).mockResolvedValue({ data: [
+      { ...sampleTokens[0], id: 'expired', name: 'old-install', expires_at: '2020-01-01T00:00:00Z' },
+      { ...sampleTokens[0], id: 'used', name: 'used-install', max_nodes: 1, nodes_enrolled: 1 },
+      { ...sampleTokens[0], id: 'bad-expiry', name: 'unknown-expiry', expires_at: '' },
+      { ...sampleTokens[0], id: 'bad-usage', name: 'unknown-usage', nodes_enrolled: -1 },
+      { ...sampleTokens[0], id: 'unlimited', name: 'unlimited-install', max_nodes: 0, nodes_enrolled: 500 },
+    ], pagination: { total: 5, count: 5, limit: 50, offset: 0, nextOffset: null, prevOffset: null } });
+    render(<OfflineBundle />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByLabelText(/enrollment token/i)).toHaveValue('unlimited'));
+    for (const name of ['old-install (expired)', 'used-install (fully used)', 'unknown-expiry (expiry unavailable)', 'unknown-usage (usage unavailable)']) {
+      expect(screen.getByRole('option', { name })).toBeDisabled();
+    }
+    expect(screen.getByRole('option', { name: 'unlimited-install' })).toBeEnabled();
+  });
+
+  it('shows the empty usable-list state without selecting an expired token', async () => {
+    vi.mocked(api.listEnrollmentTokens).mockResolvedValue({ data: [
+      { ...sampleTokens[0], expires_at: '2020-01-01T00:00:00Z' },
+    ], pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null } });
+    render(<OfflineBundle />, { wrapper: Wrapper });
+    expect(await screen.findByText(/No usable tokens in this list/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/enrollment token/i)).toHaveValue('');
+  });
+
+  it('marks an already selected token expired while the page remains open', async () => {
+    vi.useFakeTimers();
+    const now = new Date('2026-10-28T10:00:00Z');
+    vi.setSystemTime(now);
+    vi.mocked(api.listEnrollmentTokens).mockResolvedValue({ data: [
+      { ...sampleTokens[0], expires_at: new Date(now.getTime() + 1000).toISOString() },
+    ], pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null } });
+    await act(async () => { render(<OfflineBundle />, { wrapper: Wrapper }); });
+    expect(screen.getByLabelText(/enrollment token/i)).toHaveValue('tok-1');
+    await act(async () => { vi.advanceTimersByTime(1001); });
+    expect(screen.getByRole('option', { name: 'prod-fleet (expired)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Download bundle' })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('selected token is expired');
+  });
+
+  it('rechecks expiry when submitting even before the UI expiry timer runs', async () => {
+    const expires = Date.now() + 60_000;
+    vi.mocked(api.listEnrollmentTokens).mockResolvedValue({ data: [
+      { ...sampleTokens[0], expires_at: new Date(expires).toISOString() },
+    ], pagination: { total: 1, count: 1, limit: 50, offset: 0, nextOffset: null, prevOffset: null } });
+    render(<OfflineBundle />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByLabelText(/enrollment token/i)).toHaveValue('tok-1'));
+    await userEvent.setup().type(screen.getByLabelText(/raw token value/i), 'cot_test_fixture');
+    vi.spyOn(Date, 'now').mockReturnValue(expires + 1);
+    fireEvent.submit(screen.getByRole('button', { name: 'Download bundle' }).closest('form')!);
+    expect(api.buildBundleDownloadUrl).not.toHaveBeenCalled();
+    expect(api.downloadAgentBundle).not.toHaveBeenCalled();
+    expect(windowLocationAssign).not.toHaveBeenCalled();
+    expect(screen.getByText(/selected enrollment token is expired/)).toBeInTheDocument();
   });
 
   it('waits for a tenant before loading enrollment tokens', async () => {
@@ -166,8 +227,9 @@ describe('OfflineBundle', () => {
       expect(screen.getByRole('combobox', { name: /enrollment token/i })).toBeInTheDocument();
     });
 
-    const user = userEvent.setup();
-    await user.click(screen.getByRole('button', { name: /download bundle/i }));
+    const download = screen.getByRole('button', { name: /download bundle/i });
+    expect(download).toBeDisabled();
+    fireEvent.submit(download.closest('form')!);
 
     expect(screen.getByText(/enrollment token is required/i)).toBeInTheDocument();
     expect(windowLocationAssign).not.toHaveBeenCalled();
@@ -186,10 +248,23 @@ describe('OfflineBundle', () => {
     await user.click(screen.getByRole('button', { name: /download bundle/i }));
 
     await waitFor(() => {
-      expect(windowLocationAssign).toHaveBeenCalledWith(
-        expect.stringContaining('token=cot_abc'),
-      );
+      expect(api.downloadAgentBundle).toHaveBeenCalledWith({ os: 'linux', arch: 'amd64', token: 'cot_abc' });
     });
+    expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+    expect(HTMLAnchorElement.prototype.click).toHaveBeenCalledTimes(1);
+    expect(windowLocationAssign).not.toHaveBeenCalled();
+  });
+
+  it('shows a server download rejection without claiming success', async () => {
+    vi.mocked(api.downloadAgentBundle).mockRejectedValue(new Error('enrollment token has reached its node limit'));
+    render(<OfflineBundle />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByLabelText(/enrollment token/i)).toHaveValue('tok-1'));
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/raw token value/i), 'cot_test_fixture');
+    await user.click(screen.getByRole('button', { name: 'Download bundle' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('reached its node limit');
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(windowLocationAssign).not.toHaveBeenCalled();
   });
 
   it('copies the SCP command via the clipboard helper', async () => {

@@ -294,11 +294,16 @@ func TestFixedBoundaryResolvesOnlyCoveredAdvisory(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now().UTC()
 	node := storage.Node{ID: uuid.New(), TenantID: uuid.New()}
-	store := &fakeStore{nodePackages: map[uuid.UUID][]storage.NodePackage{node.ID: {{NodeID: node.ID, Name: "openssl", Version: "3.0.2-0ubuntu1.15", Source: "apt"}}}}
-	for _, cve := range []string{"CVE-TEST-COVERED", "CVE-TEST-OMITTED"} {
-		store.vulnerabilityFindings = append(store.vulnerabilityFindings, storage.VulnerabilityFinding{ID: uuid.New(), NodeID: node.ID, TenantID: node.TenantID, PackageName: "openssl", InstalledVersion: "3.0.2-0ubuntu1.14", PackageSource: "apt", CVEID: cve, EvidenceSource: "offline_vulnerability_feed"})
+	arch := "amd64"
+	baseStore := &fakeStore{nodePackages: map[uuid.UUID][]storage.NodePackage{node.ID: {{NodeID: node.ID, Name: "openssl", Version: "3.0.2-0ubuntu1.15", Source: "dpkg", Arch: &arch}}}}
+	store := &nativeAssessmentFixtureStore{fakeStore: baseStore, snapshot: nativeFixtureSnapshot(baseStore.nodePackages[node.ID], now)}
+	if err := store.UpsertNodeInventorySync(context.Background(), storage.NodeInventorySync{NodeID: node.ID, PackageCount: 1, LastFullSync: now}); err != nil {
+		t.Fatal(err)
 	}
-	feed := offlinebundle.VulnerabilityFeed{SchemaVersion: 1, Advisories: []offlinebundle.VulnerabilityAdvisory{{CVEID: "CVE-TEST-COVERED", AffectedPackages: []offlinebundle.VulnerabilityAffectedPkg{{Name: "openssl", Source: "apt", VersionScheme: "debian", VersionRange: "< 3.0.2-0ubuntu1.15", FixedVersion: "3.0.2-0ubuntu1.15"}}}}}
+	for _, cve := range []string{"CVE-TEST-COVERED", "CVE-TEST-OMITTED"} {
+		store.vulnerabilityFindings = append(store.vulnerabilityFindings, storage.VulnerabilityFinding{ID: uuid.New(), NodeID: node.ID, TenantID: node.TenantID, PackageName: "openssl", InstalledVersion: "3.0.2-0ubuntu1.14", PackageSource: "dpkg", Arch: arch, CVEID: cve, EvidenceSource: "offline_vulnerability_feed"})
+	}
+	feed := offlinebundle.VulnerabilityFeed{SchemaVersion: 1, Advisories: []offlinebundle.VulnerabilityAdvisory{{CVEID: "CVE-TEST-COVERED", AffectedPackages: []offlinebundle.VulnerabilityAffectedPkg{{Name: "openssl", Source: "dpkg", VersionScheme: "debian", VersionRange: "< 3.0.2-0ubuntu1.15", FixedVersion: "3.0.2-0ubuntu1.15"}}}}}
 	body := makeServerVulnerabilityBundleWithFeed(t, priv, "scoped-fix", "1", 1, now, feed)
 	if _, err := offlinebundle.Import(context.Background(), bytes.NewReader(body), offlinebundle.ImportOptions{RootDir: root, PublicKey: pub, Now: now}); err != nil {
 		t.Fatal(err)
@@ -309,6 +314,17 @@ func TestFixedBoundaryResolvesOnlyCoveredAdvisory(t *testing.T) {
 	}
 	if store.vulnerabilityFindings[0].ResolvedAt == nil || store.vulnerabilityFindings[1].ResolvedAt != nil {
 		t.Fatalf("incorrect advisory reconciliation: %+v", store.vulnerabilityFindings)
+	}
+	// The same fixed version in an old snapshot cannot certify remediation.
+	store.vulnerabilityFindings[0].ResolvedAt = nil
+	if err := store.UpsertNodeInventorySync(context.Background(), storage.NodeInventorySync{NodeID: node.ID, PackageCount: 1, LastFullSync: now.Add(-25 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.importOfflineVulnerabilityFeedFindingsForNode(context.Background(), store, root, node, now); err != nil {
+		t.Fatal(err)
+	}
+	if store.vulnerabilityFindings[0].ResolvedAt != nil {
+		t.Fatal("stale inventory resolved a finding")
 	}
 }
 

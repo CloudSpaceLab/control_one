@@ -157,6 +157,12 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 		return
 	}
 	currentSequence := int64(0)
+	releasePublication, err := s.acquireVulnerabilityPublication(r.Context(), true)
+	if err != nil {
+		http.Error(w, "content publication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer releasePublication()
 	if store, ok := s.store.(offlineContentStore); ok && store != nil {
 		active, err := store.ActiveOfflineContentBundle(r.Context(), tenantID, verified.Manifest.BundleID)
 		if err != nil {
@@ -178,7 +184,9 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 		writeOfflineBundleImportError(w, err)
 		return
 	}
+	s.vulnerabilityContentMu.Lock()
 	receipt, err := offlinebundle.InstallVerified(r.Context(), verified, offlinebundle.ImportOptions{RootDir: root, PublicKey: pub, Now: now, CurrentSequence: currentSequence, MaxBytes: maxBytes})
+	s.vulnerabilityContentMu.Unlock()
 	if err != nil {
 		s.auditOfflineBundleImport(r.Context(), tenantID, nil, principal, "failed", err.Error(), map[string]any{"bundle_id": verified.Manifest.BundleID})
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -234,6 +242,11 @@ func (s *Server) importOfflineBundle(w http.ResponseWriter, r *http.Request, pri
 		"sequence":  receipt.Sequence,
 		"warnings":  receipt.Warnings,
 	})
+	if err := s.publishVulnerabilityGeneration(r.Context()); err != nil {
+		http.Error(w, "content publication evidence unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	releasePublication()
 	s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
 	s.syncOfflineContentPacks(r.Context(), tenantID, receipt)
 	writeJSON(w, http.StatusCreated, newOfflineBundleReceiptResponse(*receipt))
@@ -257,7 +270,15 @@ func (s *Server) rollbackOfflineBundle(w http.ResponseWriter, r *http.Request, p
 		http.Error(w, "bundle_id and sequence are required", http.StatusBadRequest)
 		return
 	}
-	receipt, err := offlinebundle.Activate(s.offlineContentRootDir(), req.BundleID, req.Sequence)
+	releasePublication, leaseErr := s.acquireVulnerabilityPublication(r.Context(), true)
+	if leaseErr != nil {
+		http.Error(w, "content publication unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer releasePublication()
+	s.vulnerabilityContentMu.Lock()
+	receipt, err := offlinebundle.ActivateWithContext(r.Context(), s.offlineContentRootDir(), req.BundleID, req.Sequence)
+	s.vulnerabilityContentMu.Unlock()
 	if err != nil {
 		s.auditOfflineBundleAction(r.Context(), tenantID, nil, principal, "rollback", "failed", err.Error(), map[string]any{"bundle_id": req.BundleID, "sequence": req.Sequence})
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -293,6 +314,11 @@ func (s *Server) rollbackOfflineBundle(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	s.auditOfflineBundleAction(r.Context(), tenantID, nil, principal, "rollback", "ok", "", map[string]any{"bundle_id": receipt.BundleID, "sequence": receipt.Sequence})
+	if err := s.publishVulnerabilityGeneration(r.Context()); err != nil {
+		http.Error(w, "content publication evidence unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	releasePublication()
 	s.importOfflineVulnerabilityFeedFindings(r.Context(), tenantID, receipt)
 	writeJSON(w, http.StatusOK, newOfflineBundleReceiptResponse(*receipt))
 }

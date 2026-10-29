@@ -17,6 +17,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
+	"github.com/CloudSpaceLab/control_one/internal/packageinventory"
 )
 
 // heartbeatPayload is the body we POST to /api/v1/nodes/:id/heartbeat. Only
@@ -37,12 +38,15 @@ type heartbeatPayload struct {
 	// OSPackages is the full list and is only included when the hash changed,
 	// 24h have elapsed since the last full sync, or the server explicitly
 	// requested a full inventory on the previous response.
-	OSPackages     []PackageInfo   `json:"os_packages,omitempty"`
-	PackageHash    string          `json:"package_hash,omitempty"`
-	PackageCount   int             `json:"package_count,omitempty"`
-	KernelVersion  string          `json:"kernel_version,omitempty"`
-	OSVersion      string          `json:"os_version,omitempty"`
-	ServerPurposes []ServerPurpose `json:"server_purposes,omitempty"`
+	OSPackages       []PackageInfo                           `json:"os_packages,omitempty"`
+	PackageSnapshot  *packageinventory.Snapshot              `json:"package_snapshot,omitempty"`
+	UpdateCandidates []packageinventory.CandidateObservation `json:"update_candidates,omitempty"`
+	PatchHealth      *packageinventory.Health                `json:"patch_health,omitempty"`
+	PackageHash      string                                  `json:"package_hash,omitempty"`
+	PackageCount     int                                     `json:"package_count,omitempty"`
+	KernelVersion    string                                  `json:"kernel_version,omitempty"`
+	OSVersion        string                                  `json:"os_version,omitempty"`
+	ServerPurposes   []ServerPurpose                         `json:"server_purposes,omitempty"`
 
 	// Firewall snapshot — small, sent in full each heartbeat.
 	FirewallState *FirewallState `json:"firewall_state,omitempty"`
@@ -314,6 +318,9 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 		agentInventoryCache.mu.Lock()
 		agentInventoryCache.forceNext = true
 		agentInventoryCache.mu.Unlock()
+		heartbeatInventorySnapshot.mu.Lock()
+		heartbeatInventorySnapshot.data = inventorySnapshot{}
+		heartbeatInventorySnapshot.mu.Unlock()
 		log.Debug("server requested full inventory on next heartbeat")
 	}
 	return nil
@@ -346,6 +353,8 @@ func heartbeatAgentCapabilities() []string {
 // array is only sent when needed. Collection failures degrade silently —
 // missing fields are fine, blocked heartbeats are not.
 func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
+	health := collectPatchHealth()
+	payload.PatchHealth = &health
 	// Firewall is always sent in full — it's small and changes meaningfully.
 	st := cachedFirewallSnapshot()
 	payload.FirewallState = &st
@@ -393,6 +402,26 @@ func enrichHeartbeatPayload(payload *heartbeatPayload, log *zap.Logger) {
 		return
 	}
 	payload.OSPackages = pkgs
+	if runtime.GOOS == "linux" {
+		scope := ""
+		if len(pkgs) > 0 {
+			scope = pkgs[0].Source
+		} else if _, err := exec.LookPath("dpkg-query"); err == nil {
+			scope = "dpkg"
+		} else if _, err := exec.LookPath("rpm"); err == nil {
+			scope = "rpm"
+		}
+		heartbeatInventorySnapshot.mu.Lock()
+		observed := heartbeatInventorySnapshot.data.collected
+		heartbeatInventorySnapshot.mu.Unlock()
+		candidate := packageinventory.Snapshot{Schema: 1, Scope: scope, Complete: true, ObservedAt: observed, SHA256: packageinventory.Digest(pkgs), Count: len(pkgs)}
+		if candidate.Validate(pkgs, now) == nil {
+			payload.PackageSnapshot = &candidate
+			if scope == "dpkg" {
+				payload.UpdateCandidates = collectAPTCandidates(pkgs)
+			}
+		}
+	}
 	agentInventoryCache.hash = hash
 	agentInventoryCache.count = len(pkgs)
 	agentInventoryCache.kernel = payload.KernelVersion

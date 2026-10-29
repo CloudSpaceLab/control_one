@@ -26,19 +26,22 @@ const (
 
 // patchApprovalResponse is the wire shape for a single patch_approvals row.
 type patchApprovalResponse struct {
-	ID           string  `json:"id"`
-	TenantID     string  `json:"tenant_id"`
-	DeploymentID string  `json:"deployment_id"`
-	NodeID       string  `json:"node_id"`
-	Mode         string  `json:"mode"`
-	ProxyID      *string `json:"proxy_id,omitempty"`
-	WindowID     *string `json:"window_id,omitempty"`
-	Status       string  `json:"status"`
-	ApprovedBy   *string `json:"approved_by,omitempty"`
-	ApprovedAt   *string `json:"approved_at,omitempty"`
-	CreatedAt    string  `json:"created_at"`
-	ExpiresAt    string  `json:"expires_at"`
-	JobID        *string `json:"job_id,omitempty"` // populated on approve
+	PackageScopeAvailable bool     `json:"package_scope_available"`
+	PackageAllowlist      []string `json:"package_allowlist,omitempty"`
+	PackageDenylist       []string `json:"package_denylist,omitempty"`
+	ID                    string   `json:"id"`
+	TenantID              string   `json:"tenant_id"`
+	DeploymentID          string   `json:"deployment_id"`
+	NodeID                string   `json:"node_id"`
+	Mode                  string   `json:"mode"`
+	ProxyID               *string  `json:"proxy_id,omitempty"`
+	WindowID              *string  `json:"window_id,omitempty"`
+	Status                string   `json:"status"`
+	ApprovedBy            *string  `json:"approved_by,omitempty"`
+	ApprovedAt            *string  `json:"approved_at,omitempty"`
+	CreatedAt             string   `json:"created_at"`
+	ExpiresAt             string   `json:"expires_at"`
+	JobID                 *string  `json:"job_id,omitempty"` // populated on approve
 }
 
 // handlePatchApprovalsCollection routes /api/v1/patch/approvals.
@@ -195,7 +198,7 @@ func (s *Server) handleListPatchApprovals(w http.ResponseWriter, r *http.Request
 
 	items := make([]patchApprovalResponse, 0, len(approvals))
 	for i := range approvals {
-		items = append(items, patchApprovalToResponse(&approvals[i], nil))
+		items = append(items, s.patchApprovalResponseWithScope(r.Context(), &approvals[i], nil))
 	}
 
 	writeJSON(w, http.StatusOK, paginatedResponse[patchApprovalResponse]{
@@ -235,7 +238,7 @@ func (s *Server) handleGetPatchApproval(w http.ResponseWriter, r *http.Request, 
 		http.NotFound(w, r)
 		return
 	}
-	writeJSON(w, http.StatusOK, patchApprovalToResponse(approval, nil))
+	writeJSON(w, http.StatusOK, s.patchApprovalResponseWithScope(r.Context(), approval, nil))
 }
 
 func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Request, id uuid.UUID, approverSubject string) {
@@ -279,15 +282,23 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 
 	approverID, _ := uuid.Parse(strings.TrimSpace(approverSubject))
 
-	updated, err := s.store.ResolvePatchApproval(r.Context(), id, storage.ApprovalStatusApproved, approverID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "approval is not pending", http.StatusConflict)
+	_, atomicDispatch := s.store.(interface {
+		DispatchPatchJob(context.Context, storage.DispatchPatchJobParams) (*storage.NodePatchState, error)
+	})
+	updated := approval
+	if atomicDispatch {
+		policy.approvalID, policy.approvalHash, policy.approverID = id, policyHash, approverID
+	} else {
+		updated, err = s.store.ResolvePatchApproval(r.Context(), id, storage.ApprovalStatusApproved, approverID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "approval is not pending", http.StatusConflict)
+				return
+			}
+			s.logger.Error("resolve patch approval (approve)", zap.Error(err))
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		s.logger.Error("resolve patch approval (approve)", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
 	}
 
 	// Dispatch only after the current gates and required policy read passed.
@@ -301,6 +312,18 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 		updated.WindowID,
 		policy,
 	)
+	if atomicDispatch {
+		if dispErr != nil {
+			s.logger.Warn("atomic approved patch dispatch failed", zap.Error(dispErr))
+			http.Error(w, "patch dispatch did not commit; refresh approval before retrying", http.StatusServiceUnavailable)
+			return
+		}
+		updated, err = s.store.GetPatchApproval(r.Context(), id)
+		if err != nil || updated == nil {
+			http.Error(w, "cannot reload committed patch approval", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	var jobID *uuid.UUID
 	if dispErr != nil {
 		s.logger.Error("dispatch on patch approve",
@@ -310,7 +333,7 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 			zap.String("node_id", updated.NodeID.String()),
 		)
 		if state != nil {
-			if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, dispErr.Error(), ""); markErr != nil {
+			if markErr := s.markUnlinkedPatchDispatchFailed(r.Context(), state.ID, dispErr.Error(), ""); markErr != nil {
 				s.logger.Warn("mark approved patch dispatch failed", zap.Error(markErr), zap.String("node_id", updated.NodeID.String()))
 			}
 		}
@@ -320,7 +343,7 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 			id := *state.JobID
 			jobID = &id
 		}
-		_ = s.store.UpdatePatchDeploymentStatus(r.Context(), updated.DeploymentID, "in_progress", false)
+		s.maybeRollupPatchDeployment(r.Context(), updated.DeploymentID)
 	}
 
 	s.emitRemediationSafetyEvent(r.Context(), updated.TenantID, EventPatchApprovalApproved, map[string]any{
@@ -338,7 +361,7 @@ func (s *Server) handleApprovePatchApproval(w http.ResponseWriter, r *http.Reque
 		}(),
 	})
 
-	writeJSON(w, http.StatusOK, patchApprovalToResponse(updated, jobID))
+	writeJSON(w, http.StatusOK, s.patchApprovalResponseWithScope(r.Context(), updated, jobID))
 
 	s.recordAudit(r.Context(), s.systemActor(), updated.TenantID, "patch.approval_approved", "patch_approval", updated.ID.String(), map[string]any{
 		"deployment_id": updated.DeploymentID.String(),
@@ -383,7 +406,7 @@ func (s *Server) handleDenyPatchApproval(w http.ResponseWriter, r *http.Request,
 	}); stateErr != nil {
 		s.logger.Warn("create denied patch state", zap.Error(stateErr), zap.String("node_id", updated.NodeID.String()))
 	} else if state != nil {
-		if markErr := s.store.MarkNodePatchFailed(r.Context(), state.ID, "patch approval denied", ""); markErr != nil {
+		if markErr := s.markUnlinkedPatchDispatchFailed(r.Context(), state.ID, "patch approval denied", ""); markErr != nil {
 			s.logger.Warn("mark denied patch state failed", zap.Error(markErr), zap.String("node_id", updated.NodeID.String()))
 		}
 	}
@@ -398,7 +421,7 @@ func (s *Server) handleDenyPatchApproval(w http.ResponseWriter, r *http.Request,
 		"approver_id":   approverID.String(),
 	})
 
-	writeJSON(w, http.StatusOK, patchApprovalToResponse(updated, nil))
+	writeJSON(w, http.StatusOK, s.patchApprovalResponseWithScope(r.Context(), updated, nil))
 
 	s.recordAudit(r.Context(), s.systemActor(), updated.TenantID, "patch.approval_denied", "patch_approval", updated.ID.String(), map[string]any{
 		"deployment_id": updated.DeploymentID.String(),
@@ -416,6 +439,23 @@ func (s *Server) expirePatchApprovals(ctx context.Context) {
 	}
 }
 
+// Scope is read from the tenant-owned deployment; approval still independently
+// checks the bound policy hash before any dispatch. Missing evidence is explicit.
+func (s *Server) patchApprovalResponseWithScope(ctx context.Context, a *storage.PatchApproval, jobID *uuid.UUID) patchApprovalResponse {
+	resp := patchApprovalToResponse(a, jobID)
+	if a.PolicyHash == "" {
+		return resp
+	}
+	deployment, err := s.store.GetPatchDeployment(ctx, a.DeploymentID)
+	if err != nil || deployment == nil || deployment.TenantID != a.TenantID {
+		return resp
+	}
+	policy := patchPackagePolicyFromSummary(deployment.Summary)
+	resp.PackageScopeAvailable = true
+	resp.PackageAllowlist = policy.Allowlist
+	resp.PackageDenylist = policy.Denylist
+	return resp
+}
 func patchApprovalToResponse(a *storage.PatchApproval, jobID *uuid.UUID) patchApprovalResponse {
 	resp := patchApprovalResponse{
 		ID:           a.ID.String(),

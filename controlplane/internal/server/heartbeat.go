@@ -18,6 +18,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
+	"github.com/CloudSpaceLab/control_one/internal/packageinventory"
 )
 
 // enrollmentPendingTimeout controls how long a node may sit in
@@ -56,13 +57,16 @@ type heartbeatRequest struct {
 	// these; new agents send firewall every heartbeat and os_packages only
 	// when the hash changed, 24h elapsed, or the server requested a full
 	// inventory on the previous response.
-	OSPackages     []heartbeatPackage       `json:"os_packages,omitempty"`
-	PackageHash    string                   `json:"package_hash,omitempty"`
-	PackageCount   int                      `json:"package_count,omitempty"`
-	KernelVersion  string                   `json:"kernel_version,omitempty"`
-	OSVersion      string                   `json:"os_version,omitempty"`
-	ServerPurposes []heartbeatServerPurpose `json:"server_purposes,omitempty"`
-	FirewallState  *heartbeatFirewallState  `json:"firewall_state,omitempty"`
+	OSPackages       []heartbeatPackage                      `json:"os_packages,omitempty"`
+	PackageSnapshot  *packageinventory.Snapshot              `json:"package_snapshot,omitempty"`
+	UpdateCandidates []packageinventory.CandidateObservation `json:"update_candidates,omitempty"`
+	PatchHealth      *packageinventory.Health                `json:"patch_health,omitempty"`
+	PackageHash      string                                  `json:"package_hash,omitempty"`
+	PackageCount     int                                     `json:"package_count,omitempty"`
+	KernelVersion    string                                  `json:"kernel_version,omitempty"`
+	OSVersion        string                                  `json:"os_version,omitempty"`
+	ServerPurposes   []heartbeatServerPurpose                `json:"server_purposes,omitempty"`
+	FirewallState    *heartbeatFirewallState                 `json:"firewall_state,omitempty"`
 
 	// CompletedActions reports the outcome of pending_actions the agent
 	// processed since the last heartbeat.
@@ -286,6 +290,15 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		node = updated
 	}
 
+	if body.PatchHealth != nil {
+		if healthStore, ok := s.store.(interface {
+			RecordPatchHealth(context.Context, uuid.UUID, packageinventory.Health) error
+		}); ok {
+			if err := healthStore.RecordPatchHealth(r.Context(), nodeID, *body.PatchHealth); err != nil {
+				s.logger.Warn("persist patch health", zap.Error(err))
+			}
+		}
+	}
 	fullInventoryRequested := s.processHeartbeatInventory(r.Context(), nodeID, body)
 	s.processHeartbeatFirewall(r.Context(), nodeID, body)
 	if s.processHeartbeatCompletedActions(r.Context(), nodeID, body.CompletedActions) {
@@ -402,7 +415,16 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	// proxy/airgapped/direct deployments dispatch correctly — hard-coding
 	// JobTypePatchDeployDirect (PR 51 audit, bugs §3.3 #5) silently misrouted
 	// the other two modes because the agent switches on the prefix.
-	if pending, perr := s.store.ListPendingNodePatchStates(r.Context(), nodeID); perr == nil {
+	patchDispatchReady := true
+	if recovery, ok := s.store.(interface {
+		ReconcileIncompletePatchDispatches(context.Context, uuid.UUID) (int, error)
+	}); ok {
+		if _, err := recovery.ReconcileIncompletePatchDispatches(r.Context(), nodeID); err != nil {
+			patchDispatchReady = false
+			s.logger.Warn("patch dispatch reconciliation unavailable", zap.Error(err))
+		}
+	}
+	if pending, perr := s.store.ListPendingNodePatchStates(r.Context(), nodeID); perr == nil && patchDispatchReady {
 		for _, ps := range pending {
 			if ps.JobID == nil {
 				continue
@@ -987,7 +1009,10 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, reporting
 			if (c.Status != "succeeded" && c.Status != "failed") || (ps.Status != "pending" && !terminalMatch) {
 				continue
 			}
-			if terminalMatch && ((c.Status == "succeeded" && job.Status == storage.JobStatusSucceeded) || (c.Status == "failed" && job.Status == storage.JobStatusFailed)) {
+			atomicStore, atomicCompletion := s.store.(interface {
+				CompletePatchJob(context.Context, storage.CompletePatchJobParams) (bool, error)
+			})
+			if !atomicCompletion && terminalMatch && ((c.Status == "succeeded" && job.Status == storage.JobStatusSucceeded) || (c.Status == "failed" && job.Status == storage.JobStatusFailed)) {
 				if c.Status == "succeeded" && s.patchJobRequestsPostPatchRescan(ctx, jobID) {
 					requestFullInventory = true
 				}
@@ -996,31 +1021,23 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, reporting
 			logTail, _ := c.Metadata["log_tail"].(string)
 			pkgsUpgraded := metadataInt(c.Metadata, "packages_upgraded")
 			actionPlanID := s.patchActionPlanIDForJob(ctx, jobID)
-			if atomicStore, ok := s.store.(interface {
-				CompletePatchJob(context.Context, storage.CompletePatchJobParams) (bool, error)
-			}); ok {
+			if atomicCompletion {
 				errMsg := strings.TrimSpace(c.Error)
 				if c.Status == "failed" && errMsg == "" {
 					errMsg = "agent reported failure"
 				}
-				changed, err := atomicStore.CompletePatchJob(ctx, storage.CompletePatchJobParams{NodeID: reportingNodeID, JobID: jobID, Action: c.Action, Succeeded: c.Status == "succeeded", PackagesUpgraded: pkgsUpgraded, LogTail: logTail, Error: errMsg})
+				health, _ := json.Marshal(c.Metadata["patch_health"])
+				_, err := atomicStore.CompletePatchJob(ctx, storage.CompletePatchJobParams{NodeID: reportingNodeID, JobID: jobID, Action: c.Action, Succeeded: c.Status == "succeeded", PackagesUpgraded: pkgsUpgraded, LogTail: logTail, Error: errMsg, Health: health})
 				if err != nil {
 					s.logger.Warn("atomic patch completion rejected", zap.Error(err), zap.String("job_id", jobID.String()))
 					continue
 				}
-				if !changed {
-					continue
-				}
-				rescan := c.Status == "succeeded" && s.patchJobRequestsPostPatchRescan(ctx, jobID)
+				rescan := c.Status == "succeeded" // Verification always requires a later snapshot.
 				if rescan {
 					requestFullInventory = true
 				}
-				if c.Status == "succeeded" {
-					s.recordPatchActionReceipt(ctx, actionPlanID, ps, jobID, storage.ActionPlanStateSucceeded, pkgsUpgraded, logTail, "", rescan)
-				} else {
-					s.recordPatchActionReceipt(ctx, actionPlanID, ps, jobID, storage.ActionPlanStateFailed, -1, logTail, errMsg, false)
-				}
-				s.maybeRollupPatchDeployment(ctx, ps.DeploymentID)
+				// Receipt, plan state, rollup and acknowledgment eligibility are
+				// committed by the storage transaction, including matching retries.
 				continue
 			}
 			if c.Status == "succeeded" {
@@ -1102,6 +1119,14 @@ func (s *Server) persistedPatchCompletionAcknowledgments(ctx context.Context, no
 			continue
 		}
 		if (c.Status == "succeeded" && ps.Status == "applied" && job.Status == storage.JobStatusSucceeded) || (c.Status == "failed" && ps.Status == "failed" && job.Status == storage.JobStatusFailed) {
+			if effects, ok := s.store.(interface {
+				PatchCompletionEffectsCommitted(context.Context, uuid.UUID) (bool, error)
+			}); ok {
+				ready, err := effects.PatchCompletionEffectsCommitted(ctx, id)
+				if err != nil || !ready {
+					continue
+				}
+			}
 			acknowledged = append(acknowledged, c.JobID)
 		}
 	}
@@ -1368,6 +1393,14 @@ func metadataInt(m map[string]any, key string) int {
 // once every node has reported. Safe to call on every node completion —
 // it's a no-op while pendings remain.
 func (s *Server) maybeRollupPatchDeployment(ctx context.Context, deploymentID uuid.UUID) {
+	if atomic, ok := s.store.(interface {
+		RollupPatchDeployment(context.Context, uuid.UUID) error
+	}); ok {
+		if err := atomic.RollupPatchDeployment(ctx, deploymentID); err != nil {
+			s.logger.Warn("atomic patch deployment rollup", zap.Error(err))
+		}
+		return
+	}
 	rows, err := s.store.ListNodePatchStatesForDeployment(ctx, deploymentID)
 	if err != nil {
 		s.logger.Warn("rollup patch deployment", zap.Error(err))
@@ -1392,6 +1425,9 @@ func (s *Server) maybeRollupPatchDeployment(ctx context.Context, deploymentID uu
 		}
 	}
 	if pending > 0 {
+		if err := s.store.UpdatePatchDeploymentStatus(ctx, deploymentID, "in_progress", false); err != nil {
+			s.logger.Warn("mark patch deployment in progress", zap.Error(err))
+		}
 		return
 	}
 	status := "completed"
@@ -1439,6 +1475,35 @@ const fullInventoryRefreshInterval = 24 * time.Hour
 // If the agent didn't send any inventory fields (old agent or unsupported
 // platform), this is a no-op.
 func (s *Server) processHeartbeatInventory(ctx context.Context, nodeID uuid.UUID, body heartbeatRequest) bool {
+	if body.PackageSnapshot != nil {
+		items := make([]packageinventory.Item, 0, len(body.OSPackages))
+		for _, p := range body.OSPackages {
+			items = append(items, packageinventory.Item{Name: p.Name, Version: p.Version, Source: p.Source, Arch: p.Arch})
+		}
+		writer, ok := s.store.(interface {
+			ReplaceNativePackageSnapshot(context.Context, uuid.UUID, []packageinventory.Item, packageinventory.Snapshot, string) error
+		})
+		if !ok || body.PackageCount != len(items) || body.PackageSnapshot.Validate(items, time.Now().UTC()) != nil {
+			s.invalidateNativeSnapshot(ctx, nodeID, body.PackageSnapshot.ObservedAt)
+			return true
+		}
+		if err := writer.ReplaceNativePackageSnapshot(ctx, nodeID, items, *body.PackageSnapshot, body.PackageHash); err != nil {
+			s.logger.Warn("reject native package snapshot", zap.Error(err))
+			return true
+		}
+		if candidateStore, ok := s.store.(interface {
+			RecordNodeUpdateCandidates(context.Context, uuid.UUID, string, []packageinventory.CandidateObservation) error
+		}); ok {
+			if err := candidateStore.RecordNodeUpdateCandidates(ctx, nodeID, body.PackageSnapshot.SHA256, body.UpdateCandidates); err != nil {
+				s.logger.Warn("candidate observation rejected", zap.Error(err))
+				return true
+			}
+		}
+		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil {
+			s.refreshOfflineVulnerabilityFindingsForNode(ctx, node, body.PackageSnapshot.ObservedAt, "authoritative_native_snapshot")
+		}
+		return false
+	}
 	if body.PackageHash == "" {
 		return false
 	}
@@ -1499,6 +1564,7 @@ func (s *Server) processHeartbeatInventory(ctx context.Context, nodeID uuid.UUID
 		return true
 	}
 	if rows == 0 {
+		s.invalidateNativeSnapshot(ctx, nodeID, time.Now().UTC())
 		// Either no record exists or the hash diverged. Either way, ask for
 		// a full resend on the next heartbeat.
 		return true
@@ -1506,11 +1572,25 @@ func (s *Server) processHeartbeatInventory(ctx context.Context, nodeID uuid.UUID
 
 	// Hash matched. Cap server-side staleness at fullInventoryRefreshInterval.
 	if existing, gerr := s.store.GetNodeInventorySync(ctx, nodeID); gerr == nil && existing != nil {
+		if existing.PackageCount != body.PackageCount {
+			s.invalidateNativeSnapshot(ctx, nodeID, time.Now().UTC())
+			return true
+		}
 		if time.Since(existing.LastFullSync) >= fullInventoryRefreshInterval {
 			return true
 		}
 	}
 	return false
+}
+
+func (s *Server) invalidateNativeSnapshot(ctx context.Context, nodeID uuid.UUID, observed time.Time) {
+	if snapshots, ok := s.store.(interface {
+		InvalidateNativePackageSnapshot(context.Context, uuid.UUID, time.Time) error
+	}); ok {
+		if err := snapshots.InvalidateNativePackageSnapshot(ctx, nodeID, observed); err != nil {
+			s.logger.Warn("invalidate native completeness evidence", zap.Error(err))
+		}
+	}
 }
 
 // processHeartbeatFirewall persists the firewall snapshot in full each time.

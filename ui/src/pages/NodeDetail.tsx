@@ -20,6 +20,9 @@ import { ConfirmModal } from '@/components/ConfirmModal';
 import { RepairAgentDialog } from '@/components/nodes/RepairAgentDialog';
 import { ConnectionDetailSheet } from '@/components/investigate/ConnectionDetailSheet';
 import { LogDumpPanel } from '@/features/log-dumps/LogDumpPanel';
+import { NodeAssessmentEvidence } from '@/features/patch-management/NodeAssessmentEvidence';
+import { PatchVerificationEvidence } from '@/features/patch-management/PatchVerificationEvidence';
+import { UpdateCandidateEvidence } from '@/features/patch-management/UpdateCandidateEvidence';
 import {
   Dialog,
   DialogContent,
@@ -1718,6 +1721,10 @@ function KnowledgeGraphTab({ nodeId, tenantId }: { nodeId: string; tenantId: str
 function PackagesTab({ nodeId }: { nodeId: string }) {
   const api = useApiClient();
   const [packages, setPackages] = useState<import('@/lib/api').NodePackage[]>([]);
+  const [assessment, setAssessment] = useState<import('@/lib/api').NodeAssessment | null>(null);
+  const [verification, setVerification] = useState<import('@/lib/api').PatchVerification[]>([]);
+  const [candidates, setCandidates] = useState<import('@/lib/api').UpdateCandidate[]>([]);
+  const [patchHealth, setPatchHealth] = useState<import('@/lib/api').PatchHealthEvidence | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -1731,6 +1738,10 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
     try {
       const resp = await api.listNodePackages(nodeId);
       setPackages(resp.data ?? []);
+      setAssessment(resp.assessment ?? null);
+      setVerification(resp.patch_verifications ?? []);
+      setCandidates(resp.update_candidates ?? []);
+      setPatchHealth(resp.patch_health ?? null);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'load failed');
@@ -1740,7 +1751,9 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
   }, [api, nodeId]);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 30_000);
+    return () => window.clearInterval(timer);
   }, [refresh]);
 
   const systemCount = useMemo(
@@ -1798,6 +1811,9 @@ function PackagesTab({ nodeId }: { nodeId: string }) {
         />
       </div>
 
+      <NodeAssessmentEvidence assessment={assessment} loadFailed={!!err} />
+      {!err && <PatchVerificationEvidence records={verification} health={patchHealth} />}
+      {!err && <UpdateCandidateEvidence records={candidates} query={query} />}
       <Panel
         padding="md"
         eyebrow="INVENTORY"

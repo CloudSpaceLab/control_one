@@ -1177,6 +1177,12 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 	if job.TenantID != uuid.Nil && !s.requireTenantAccess(w, r, principal, job.TenantID, roleOperator, roleAdmin) {
 		return
 	}
+	// A dispatched package-manager command cannot be stopped by marking its
+	// database job cancelled. Doing so also races away its real completion.
+	if job.Type == JobTypePatchDeployDirect || job.Type == JobTypePatchDeployProxy || job.Type == JobTypePatchDeployAirgapped {
+		http.Error(w, "dispatched patch execution cannot be cancelled; retain and reconcile its actual outcome", http.StatusConflict)
+		return
+	}
 
 	if !jobCancelable(job.Status) {
 		http.Error(w, "job cannot be cancelled in its current state", http.StatusConflict)

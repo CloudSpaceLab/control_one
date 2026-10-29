@@ -66,14 +66,36 @@ func TestPatchRoutesRejectUnassignedTenant(t *testing.T) {
 		{"windows", "GET", "/api/v1/patch/maintenance-windows?tenant_id=" + tenantID.String(), "", srv.handleListMaintenanceWindows},
 		{"proxies", "GET", "/api/v1/patch/proxies?tenant_id=" + tenantID.String(), "", srv.handleListSquidProxies},
 	} {
-		t.Run(route.name, func(t *testing.T) {
-			req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
-			principal := &auth.Principal{Type: "user", Subject: "patch-user", Roles: []string{roleOperator}}
-			req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, principal))
-			rec := httptest.NewRecorder()
-			route.handler(rec, req)
-			require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-		})
+		for _, role := range []string{roleOperator, roleAdmin} {
+			t.Run(route.name+"/"+role, func(t *testing.T) {
+				req := httptest.NewRequest(route.method, route.path, strings.NewReader(route.body))
+				principal := &auth.Principal{Type: "user", Subject: "patch-user", Roles: []string{role}}
+				req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, principal))
+				rec := httptest.NewRecorder()
+				route.handler(rec, req)
+				require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
+			})
+		}
+	}
+}
+
+func TestDispatchedPatchJobsCannotBeCancelled(t *testing.T) {
+	for _, mode := range []string{JobTypePatchDeployDirect, JobTypePatchDeployProxy, JobTypePatchDeployAirgapped} {
+		for _, status := range []storage.JobStatus{storage.JobStatusQueued, storage.JobStatusRunning, storage.JobStatusSucceeded} {
+			t.Run(mode+"/"+string(status), func(t *testing.T) {
+				tenantID, nodeID, userID, jobID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+				store := &patchSecurityStore{patchTestStore: newPatchTestStore(tenantID, nodeID), allowed: true}
+				store.users = map[string]*storage.User{"patch-user": {ID: userID, ExternalID: "patch-user"}}
+				store.jobs = map[uuid.UUID]*storage.Job{jobID: {ID: jobID, TenantID: tenantID, Type: mode, Status: status}}
+				srv := &Server{store: store, logger: zap.NewNop()}
+				req := httptest.NewRequest(http.MethodPost, "/api/v1/jobs/"+jobID.String()+"/cancel", nil)
+				req = req.WithContext(context.WithValue(req.Context(), auth.ContextKeyPrincipal, &auth.Principal{Type: "user", Subject: "patch-user", Roles: []string{roleOperator}}))
+				rec := httptest.NewRecorder()
+				srv.handleCancelJob(rec, req, jobID)
+				require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+				require.Equal(t, status, store.jobs[jobID].Status)
+			})
+		}
 	}
 }
 
@@ -94,7 +116,7 @@ func TestPatchSafetyReadFailuresBlockDispatch(t *testing.T) {
 }
 
 func TestPatchApprovalRejectsChangedPlanAndSafety(t *testing.T) {
-	for _, change := range []string{"package_policy", "manual_only", "policy_unavailable", "legacy_snapshot"} {
+	for _, change := range []string{"package_policy", "manual_only", "isolation_changed", "policy_unavailable", "legacy_snapshot"} {
 		t.Run(change, func(t *testing.T) {
 			tenantID, nodeID := uuid.New(), uuid.New()
 			store := &patchSecurityStore{patchTestStore: newPatchTestStore(tenantID, nodeID), allowed: true}
@@ -117,6 +139,8 @@ func TestPatchApprovalRejectsChangedPlanAndSafety(t *testing.T) {
 				store.deployments[approval.DeploymentID].Summary["package_allowlist"] = []string{"openssl"}
 			case "manual_only":
 				store.nodes[0].Labels = map[string]any{"remediation": "manual-only"}
+			case "isolation_changed":
+				store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeAirgapped}
 			case "policy_unavailable":
 				store.failRead = "policy"
 			case "legacy_snapshot":

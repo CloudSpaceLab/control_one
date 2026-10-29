@@ -358,6 +358,24 @@ function deploymentModeLabel(deployment: PatchDeployment): string {
   return modes.size === 1 ? `auto (${[...modes][0]})` : 'auto (per node)';
 }
 
+function DeploymentPackageScope({ deployment }: { deployment: PatchDeployment }): JSX.Element {
+  const summary = deployment.Summary;
+  const validNames = (value: unknown): value is string[] | null =>
+    value === null || (Array.isArray(value) && value.every((name) => typeof name === 'string' && name.trim().length > 0));
+  if (!summary || !Object.prototype.hasOwnProperty.call(summary, 'package_allowlist') ||
+      !validNames(summary.package_allowlist) ||
+      (summary.package_denylist !== undefined && !validNames(summary.package_denylist))) {
+    return <span className="text-text-secondary">Package scope unavailable</span>;
+  }
+  const allowed = summary.package_allowlist ?? [];
+  const denied = summary.package_denylist ?? [];
+  return <div className="text-xs">
+    <div>{allowed.length ? allowed.join(', ') : 'All eligible packages'}</div>
+    {!!denied.length && <div>Excluded: {denied.join(', ')}</div>}
+    <div className="text-text-secondary">Required dependencies may also change.</div>
+  </div>;
+}
+
 function DeploymentsPanel({
   loading,
   deployments,
@@ -408,6 +426,7 @@ function DeploymentsPanel({
           <thead className="bg-surface-2 text-left text-xs uppercase tracking-wider text-text-secondary">
             <tr>
               <th className="px-3 py-2">Requested</th>
+              <th className="px-3 py-2">Package scope</th>
               <th className="px-3 py-2">Mode</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Applied / Total</th>
@@ -419,6 +438,7 @@ function DeploymentsPanel({
             {deployments.map((d) => (
               <tr key={d.ID} className="border-t border-border hover:bg-hover">
                 <td className="px-3 py-2 text-text-secondary">{new Date(d.RequestedAt).toLocaleString()}</td>
+                <td className="px-3 py-2"><DeploymentPackageScope deployment={d} /></td>
                 <td className="px-3 py-2">{deploymentModeLabel(d)}</td>
                 <td className="px-3 py-2">
                   <StatusTag tone={statusTone(d.Status)}>{d.Status}</StatusTag>
@@ -1066,7 +1086,7 @@ function formatDuration(ms: number): string {
   return `${m}m`;
 }
 
-function DeploymentNodeDetail({
+export function DeploymentNodeDetail({
   deployment,
   onClose,
 }: {
@@ -1112,6 +1132,11 @@ function DeploymentNodeDetail({
         </Button>
       </div>
       {loading && <Skeleton className="h-32 w-full" />}
+      <section className="mb-4 rounded border border-border p-3" aria-label="Requested package scope">
+        <p className="mb-1 text-xs font-medium">Requested package scope</p>
+        <DeploymentPackageScope deployment={deployment} />
+        <p className="mt-2 text-xs text-text-secondary">PKGS is the actual number upgraded on each node. It can be 0 when the requested packages are already current.</p>
+      </section>
       {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
       {!loading && rows.length === 0 && <EmptyState title="No nodes" description="No nodes received this deployment." />}
       {rows.length > 0 && (
@@ -1133,6 +1158,8 @@ function DeploymentNodeDetail({
                 <td className="px-2 py-1 font-mono text-xs">{r.NodeID.slice(0, 8)}</td>
                 <td className="px-2 py-1">
                   <StatusTag tone={nodeStatusTone(r.Status)}>{r.Status}</StatusTag>
+                  <p className="mt-1 text-xs text-text-secondary">Verification: {r.Verification?.current_state.replaceAll('_', ' ') ?? 'unavailable'}</p>
+                  <p className="text-xs text-text-secondary">Promotion: {r.Verification?.promotion_eligible ? 'eligible' : 'blocked'}</p>
                 </td>
                 <td className="px-2 py-1 text-xs">{r.PackagesUpgraded ?? '—'}</td>
                 <td className="px-2 py-1 text-xs text-text-secondary">
@@ -1166,7 +1193,7 @@ function DeploymentNodeDetail({
   );
 }
 
-function NodeConfigEditor({
+export function NodeConfigEditor({
   node,
   onClose,
 }: {
@@ -1176,26 +1203,38 @@ function NodeConfigEditor({
   const client = useApiClient();
   const [cfg, setCfg] = useState<NodePatchConfig | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<NodePatchConfig['Mode']>('direct');
+  const [proxyId, setProxyId] = useState('');
+  const [proxies, setProxies] = useState<SquidProxy[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancel = false;
     (async () => {
       try {
-        const data = await client.getNodePatchConfig(node.NodeID);
-        if (!cancel) setCfg(data);
-      } catch {
-        if (!cancel) setCfg({ NodeID: node.NodeID, Mode: 'direct', UpdatedAt: '' });
+        const [data, available] = await Promise.all([
+          client.getNodePatchConfig(node.NodeID), client.listSquidProxies(node.TenantID),
+        ]);
+        if (!cancel) {
+          setCfg(data); setMode(data.Mode); setProxyId(data.ProxyID ?? '');
+          setProxies(available.proxies.filter((proxy) => proxy.Status !== 'removed'));
+        }
+      } catch (error) {
+        if (!cancel) setLoadError(error instanceof Error ? error.message : 'Could not load patch settings');
       }
     })();
     return () => {
       cancel = true;
     };
-  }, [client, node.NodeID]);
+  }, [client, node.NodeID, node.TenantID]);
 
-  const save = async (mode: 'direct' | 'proxy' | 'airgapped') => {
+  const save = async () => {
+    if (!cfg || loadError || (mode === 'proxy' && !proxyId)) return;
     setBusy(true);
     try {
-      const updated = await client.upsertNodePatchConfig({ node_id: node.NodeID, mode });
+      const updated = await client.upsertNodePatchConfig({
+        node_id: node.NodeID, mode, proxy_id: proxyId || undefined, window_id: cfg.WindowID,
+      });
       setCfg(updated);
       toast.success('Patch config updated');
     } catch (err) {
@@ -1221,10 +1260,11 @@ function NodeConfigEditor({
           <button
             key={m}
             type="button"
-            disabled={busy}
-            onClick={() => save(m)}
+            disabled={busy || !cfg || !!loadError}
+            aria-pressed={mode === m}
+            onClick={() => setMode(m)}
             className={`w-full rounded border p-3 text-left text-sm ${
-              cfg?.Mode === m ? 'border-primary bg-surface-2' : 'border-border bg-surface-1'
+              mode === m ? 'border-primary bg-surface-2' : 'border-border bg-surface-1'
             }`}
           >
             <div className="font-medium">{m}</div>
@@ -1235,6 +1275,19 @@ function NodeConfigEditor({
             </div>
           </button>
         ))}
+        <label className="block pt-3 text-sm" htmlFor={`patch-proxy-${node.NodeID}`}>
+          Repository proxy
+        </label>
+        <select id={`patch-proxy-${node.NodeID}`} className="w-full rounded border border-border bg-surface-1 p-2 text-sm"
+          disabled={busy || !cfg || !!loadError} value={proxyId} onChange={(event) => setProxyId(event.target.value)}>
+          <option value="">No proxy selected</option>
+          {proxies.map((proxy) => <option key={proxy.ID} value={proxy.ID}>{proxy.Host}:{proxy.Port}</option>)}
+        </select>
+        {mode === 'proxy' && !proxyId && <p className="text-sm text-text-secondary">Select a repository proxy before saving proxy mode.</p>}
+        {loadError && <p role="alert" className="text-sm text-red-400">Could not load patch settings: {loadError}</p>}
+        <Button disabled={busy || !cfg || !!loadError || (mode === 'proxy' && !proxyId)} onClick={save}>
+          {busy ? 'Saving…' : 'Save patch settings'}
+        </Button>
       </div>
     </aside>
   );
@@ -1619,6 +1672,7 @@ function ApprovalQueue({
             <th className="px-3 py-2">Node</th>
             <th className="px-3 py-2">Mode</th>
             <th className="px-3 py-2">Expires</th>
+            <th className="px-3 py-2">Package scope</th>
             <th className="px-3 py-2 text-right"></th>
           </tr>
         </thead>
@@ -1635,6 +1689,13 @@ function ApprovalQueue({
                 <td className="px-3 py-2 text-xs text-text-secondary">
                   {a.expires_at ? new Date(a.expires_at).toLocaleString() : '—'}
                   {expired && <span className="ml-1 text-destructive">(expired)</span>}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {a.package_scope_available
+                    ? <><div>{a.package_allowlist?.length ? a.package_allowlist.join(', ') : 'All eligible packages'}</div>
+                        {!!a.package_denylist?.length && <div>Excluded: {a.package_denylist.join(', ')}</div>}
+                        <div className="text-text-secondary">Required dependencies may also change.</div></>
+                    : <span className="text-text-secondary">Package scope unavailable</span>}
                 </td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
                   <Button

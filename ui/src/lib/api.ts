@@ -2521,6 +2521,59 @@ export interface NodePackage {
   is_system?: boolean;
 }
 
+export interface NodeAssessment {
+  id: string;
+  tenant_id: string;
+  node_id: string;
+  started_at: string;
+  completed_at: string;
+  status: 'partial' | 'expired' | 'unavailable' | 'unknown';
+  current_status: 'partial' | 'expired' | 'unavailable' | 'unknown';
+  current_reasons: string[];
+  inventory_generation: string;
+  evidence: {
+    coverage: string;
+    inventory_completeness: string;
+    inventory_last_full_sync?: string;
+    package_count: number;
+    match_count: number;
+    feed_generation: string;
+    feeds: Array<{ name: string; sha256: string; bundle_id: string; sequence: number; expires_at?: string }>;
+    reasons: string[];
+    exclusions: Record<string, number>;
+    version_schemes: Record<string, number>;
+    findings_updated: boolean;
+	removed_findings?: number;
+	native_snapshot?: { scope: string; complete: boolean; observed_at: string; sha256: string; count: number };
+  };
+}
+
+export interface PatchVerification {
+  job_id: string;
+  deployment_id: string;
+  node_id: string;
+  state: string;
+  current_state: string;
+  promotion_eligible: boolean;
+	current_reasons?: string[];
+  execution_completed_at?: string;
+  updated_at: string;
+  baseline: Array<{ name: string; installed_version: string; fixed_version?: string; cve_id: string }>;
+  evidence: { reason?: string; assessment_id?: string };
+}
+
+export interface PatchHealthEvidence {
+  current: boolean;
+  evidence: { observed_at: string; boot_id: string; reboot_required: boolean | null; package_audit: string; service_health: string; services_complete: boolean; consumers_complete: boolean };
+}
+
+export interface UpdateCandidate {
+  name: string; arch: string; installed_version: string; inventory_generation: string;
+  coverage: string; security_fix_applicable: boolean; repository_verified: boolean; version_relation: string; reason: string;
+  fix_boundaries: Array<{ cve_id: string; severity: string; fixed_version: string; advisory_url: string; currently_affected?: boolean }>;
+  repository_observation?: { candidate_version: string; observed_at: string; state: string; reason: string; repository: string; vendor: string; suite: string; component: string; expires_at: string; release_sha256: string; index_sha256: string; artifact_sha256: string };
+}
+
 export interface NodeService {
   id: string;
   node_id: string;
@@ -3185,9 +3238,9 @@ export class APIClient {
     };
   }
 
-  async listNodePackages(nodeId: string): Promise<{ data: NodePackage[] }> {
+  async listNodePackages(nodeId: string): Promise<{ data: NodePackage[]; assessment?: NodeAssessment | null; patch_verifications?: PatchVerification[] | null; update_candidates?: UpdateCandidate[] | null; patch_health?: PatchHealthEvidence | null }> {
     const encoded = encodeURIComponent(nodeId);
-    return this.request<{ data: NodePackage[] }>(
+    return this.request<{ data: NodePackage[]; assessment?: NodeAssessment | null; patch_verifications?: PatchVerification[] | null; update_candidates?: UpdateCandidate[] | null; patch_health?: PatchHealthEvidence | null }>(
       `/api/v1/nodes/${encoded}/packages`,
     );
   }
@@ -5523,6 +5576,13 @@ export class APIClient {
     return `${this.baseUrl}/api/v1/agent/bundle?${search.toString()}`;
   }
 
+  async downloadAgentBundle(options: BundleDownloadOptions): Promise<DownloadedFile> {
+    const search = new URLSearchParams({ os: options.os, arch: options.arch, token: options.token });
+    // A 401 can describe the enrollment credential rather than the user's
+    // session. Show that error without discarding the signed-in session.
+    return this.download(`/api/v1/agent/bundle?${search.toString()}`, false);
+  }
+
   async listOfflineContentBundles(params: {
     tenantId: string;
     bundleId?: string;
@@ -5608,7 +5668,7 @@ export class APIClient {
     return (await response.json()) as T;
   }
 
-  private async download(path: string): Promise<DownloadedFile> {
+  private async download(path: string, invalidateSessionOnUnauthorized = true): Promise<DownloadedFile> {
     const response = await fetch(`${this.baseUrl}${path}`, {
       headers: {
         ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
@@ -5617,7 +5677,7 @@ export class APIClient {
 
     if (!response.ok) {
       if (
-        response.status === HTTP_STATUS_UNAUTHORIZED &&
+        invalidateSessionOnUnauthorized && response.status === HTTP_STATUS_UNAUTHORIZED &&
         this.unauthorizedHandler
       ) {
         this.unauthorizedHandler();
@@ -7336,6 +7396,7 @@ export interface PatchDeployment {
 }
 
 export interface NodePatchState {
+	Verification?: PatchVerification;
   ID: string;
   DeploymentID: string;
   NodeID: string;
@@ -7367,6 +7428,9 @@ export interface PatchDeployResponse {
 
 // PatchApproval mirrors patchApprovalResponse on the server.
 export interface PatchApproval {
+  package_scope_available?: boolean;
+  package_allowlist?: string[];
+  package_denylist?: string[];
   id: string;
   tenant_id: string;
   deployment_id: string;

@@ -429,7 +429,7 @@ func writeBundleTarball(w io.Writer, entries []bundleEntry) error {
 }
 
 // validateEnrollmentTokenForBundle hashes + looks up the provided token and
-// enforces the same revoked/expired checks used by the enrollment endpoint.
+// enforces the same revoked/expired/node-limit checks used by enrollment.
 // On failure the helper writes the precise HTTP status to w and returns a
 // non-nil error so callers can short-circuit without re-writing a response.
 func (s *Server) validateEnrollmentTokenForBundle(w http.ResponseWriter, r *http.Request, token string) (string, error) {
@@ -450,9 +450,13 @@ func (s *Server) validateEnrollmentTokenForBundle(w http.ResponseWriter, r *http
 		http.Error(w, "enrollment token has been revoked", http.StatusUnauthorized)
 		return "", fmt.Errorf("token revoked")
 	}
-	if time.Now().After(record.ExpiresAt) {
+	if !time.Now().Before(record.ExpiresAt) {
 		http.Error(w, "enrollment token has expired", http.StatusUnauthorized)
 		return "", fmt.Errorf("token expired")
+	}
+	if record.MaxNodes > 0 && record.NodesEnrolled >= record.MaxNodes {
+		http.Error(w, "enrollment token has reached its node limit", http.StatusForbidden)
+		return "", fmt.Errorf("token node limit reached")
 	}
 	return tokenHash, nil
 }

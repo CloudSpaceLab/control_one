@@ -56,6 +56,7 @@ func newBundleTestServer(t *testing.T, osName, archName, tokenHash, plaintextTok
 		},
 	}
 	cfg := &config.Config{
+		Auth: authWithTokens("admin", "bundle-fixture-admin"),
 		HTTP: config.HTTPConfig{Address: ":0"},
 		Agent: config.AgentConfig{
 			BinaryDir:            dir,
@@ -123,6 +124,56 @@ func TestAgentBundleRejectsMissingToken(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAgentBundleRejectsExhaustedTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		max, used int
+		expired   bool
+		want      int
+	}{
+		{"at limit", 1, 1, false, http.StatusForbidden},
+		{"over limit", 1, 2, false, http.StatusForbidden},
+		{"capacity remains", 2, 1, false, http.StatusOK},
+		{"unlimited", 0, 100, false, http.StatusOK},
+		{"expired", 1, 0, true, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token := "cot_bundle_limit_fixture"
+			hash := hashToken(t, token)
+			srv, _ := newBundleTestServer(t, "linux", "amd64", hash, token)
+			store := srv.store.(*fakeStore)
+			record := store.enrollmentTokens[hash]
+			record.MaxNodes = tc.max
+			record.NodesEnrolled = tc.used
+			if tc.expired {
+				record.ExpiresAt = time.Now().Add(-time.Hour)
+			}
+			store.enrollmentTokens[hash] = record
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/bundle?os=linux&arch=amd64&token="+token, nil)
+			req.Header.Set("Authorization", "Bearer bundle-fixture-admin")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d", rec.Code, tc.want)
+			}
+			if tc.want == http.StatusForbidden && !strings.Contains(rec.Body.String(), "node limit") {
+				t.Fatal("missing actionable exhaustion error")
+			}
+		})
+	}
+}
+
+func TestAgentBundleStillRequiresUserAuthentication(t *testing.T) {
+	token := "cot_bundle_auth_fixture"
+	srv, _ := newBundleTestServer(t, "linux", "amd64", hashToken(t, token), token)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/bundle?os=linux&arch=amd64&token="+token, nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("valid enrollment token bypassed user authentication: %d", rec.Code)
 	}
 }
 

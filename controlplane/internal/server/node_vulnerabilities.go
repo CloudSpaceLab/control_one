@@ -103,7 +103,14 @@ func (s *Server) handleNodeVulnerabilities(w http.ResponseWriter, r *http.Reques
 	for _, finding := range findings {
 		out = append(out, newNodeVulnerabilityResponse(finding))
 	}
+	assessment, err := s.latestNodeAssessment(r.Context(), node)
+	if err != nil {
+		s.logger.Error("get node assessment", zap.Error(err))
+		http.Error(w, "assessment unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
+		"assessment": assessment,
 		"data":       out,
 		"pagination": newPaginationMeta(total, limit, offset, len(out)),
 		"summary":    summarizeNodeVulnerabilities(findings, total),

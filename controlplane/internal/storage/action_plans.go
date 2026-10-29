@@ -138,6 +138,14 @@ func (s *Store) CreateActionPlan(ctx context.Context, p CreateActionPlanParams) 
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
+	return createActionPlan(ctx, s.db, p)
+}
+
+type actionPlanQueryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func createActionPlan(ctx context.Context, q actionPlanQueryer, p CreateActionPlanParams) (*ActionPlan, error) {
 	if p.TenantID == uuid.Nil {
 		return nil, errors.New("tenant id is required")
 	}
@@ -187,7 +195,7 @@ func (s *Store) CreateActionPlan(ctx context.Context, p CreateActionPlanParams) 
 		return nil, fmt.Errorf("encode source ref: %w", err)
 	}
 
-	row := s.db.QueryRowContext(ctx, `
+	row := q.QueryRowContext(ctx, `
 		INSERT INTO action_plans (
 			tenant_id, node_id, domain, action_kind, state, risk,
 			scope, diff, required_approvals, maintenance_window,

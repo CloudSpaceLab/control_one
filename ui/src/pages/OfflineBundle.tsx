@@ -27,6 +27,17 @@ const ARCH_OPTIONS: Array<{ value: string; label: string }> = [
 
 type PendingBundleActivation = { bundle: OfflineContentBundle; error?: string };
 
+function tokenUnavailableReason(token: EnrollmentToken, now: number): string | null {
+  if (token.revoked_at) return 'revoked';
+  const expiresAt = Date.parse(token.expires_at);
+  if (!Number.isFinite(expiresAt)) return 'expiry unavailable';
+  if (expiresAt <= now) return 'expired';
+  if (!Number.isInteger(token.max_nodes) || token.max_nodes < 0
+      || !Number.isInteger(token.nodes_enrolled) || token.nodes_enrolled < 0) return 'usage unavailable';
+  if (token.max_nodes > 0 && token.nodes_enrolled >= token.max_nodes) return 'fully used';
+  return null;
+}
+
 export function OfflineBundle(): JSX.Element {
   const api = useApiClient();
   const { showToast } = useToast();
@@ -38,9 +49,11 @@ export function OfflineBundle(): JSX.Element {
   const [tokensError, setTokensError] = useState<string | null>(null);
 
   const [selectedTokenId, setSelectedTokenId] = useState('');
+  const [tokenClock, setTokenClock] = useState(Date.now);
   const [os, setOs] = useState(OS_OPTIONS[0].value);
   const [arch, setArch] = useState(ARCH_OPTIONS[0].value);
   const [tokenOverride, setTokenOverride] = useState('');
+  const [bundleDownloading, setBundleDownloading] = useState(false);
   const [contentBundles, setContentBundles] = useState<OfflineContentBundle[]>([]);
   const [contentLoading, setContentLoading] = useState(false);
   const [contentError, setContentError] = useState<string | null>(null);
@@ -67,16 +80,19 @@ export function OfflineBundle(): JSX.Element {
       const response = await api.listEnrollmentTokens({ tenant_id: currentTenantId, limit: 50, offset: 0 });
       if (requestId !== tokenLoadSequence.current) return;
       setTokens(response.data);
-      // Pre-select the first non-revoked token so the happy path is one-click.
-      const firstUsable = response.data.find((token) => !token.revoked_at);
+      const now = Date.now();
+      setTokenClock(now);
+      const firstUsable = response.data.find((token) => !tokenUnavailableReason(token, now));
       setSelectedTokenId((current) =>
-        current && response.data.some((token) => token.id === current && !token.revoked_at)
+        current && response.data.some((token) => token.id === current && !tokenUnavailableReason(token, now))
           ? current
           : firstUsable?.id ?? '',
       );
     } catch (err) {
       if (requestId !== tokenLoadSequence.current) return;
       const message = err instanceof Error ? err.message : 'Failed to load enrollment tokens.';
+      setTokens([]);
+      setSelectedTokenId('');
       setTokensError(message);
     } finally {
       if (requestId === tokenLoadSequence.current) setTokensLoading(false);
@@ -84,9 +100,21 @@ export function OfflineBundle(): JSX.Element {
   }, [api, currentTenantId]);
 
   useEffect(() => {
+    setTokens([]);
     setSelectedTokenId('');
     setTokenOverride('');
   }, [currentTenantId]);
+
+  // Refresh eligibility at the next expiry, including while this page stays
+  // open. Submission also checks the actual clock to close the timer race.
+  useEffect(() => {
+    const nextExpiry = Math.min(...tokens.map(token => Date.parse(token.expires_at))
+      .filter(expiry => Number.isFinite(expiry) && expiry > tokenClock));
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = window.setTimeout(() => setTokenClock(Date.now()),
+      Math.min(2_147_483_647, Math.max(1, nextExpiry - Date.now())));
+    return () => window.clearTimeout(timer);
+  }, [tokens, tokenClock]);
 
   useEffect(() => {
     void loadTokens();
@@ -116,6 +144,8 @@ export function OfflineBundle(): JSX.Element {
   const selectedToken = useMemo<EnrollmentToken | undefined>(() => {
     return tokens.find((token) => token.id === selectedTokenId);
   }, [tokens, selectedTokenId]);
+  const selectedTokenIssue = selectedToken ? tokenUnavailableReason(selectedToken, tokenClock) : null;
+  const hasUsableToken = tokens.some(token => !tokenUnavailableReason(token, tokenClock));
 
   // The list endpoint returns token.token only on creation, so for downloads
   // the operator must paste the raw token value. We expose an override input
@@ -146,9 +176,17 @@ export function OfflineBundle(): JSX.Element {
     }
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (bundleDownloading) return;
     feedback.reset();
+
+    const issue = selectedToken && tokenUnavailableReason(selectedToken, Date.now());
+    if (issue) {
+      setTokenClock(Date.now());
+      feedback.showError(`The selected enrollment token is ${issue}. Select a usable token or clear the selection and paste a fresh token.`);
+      return;
+    }
 
     if (!effectiveToken) {
       feedback.showError(
@@ -161,11 +199,26 @@ export function OfflineBundle(): JSX.Element {
       return;
     }
 
-    const url = api.buildBundleDownloadUrl({ os, arch, token: effectiveToken });
-    feedback.showSuccess(`Requesting ${bundleFilename}…`);
-    // Browser handles the streaming download — we intentionally do not fetch()
-    // the response into memory because the bundle can be tens of megabytes.
-    window.location.assign(url);
+    setBundleDownloading(true);
+    try {
+      const file = await api.downloadAgentBundle({ os, arch, token: effectiveToken });
+      const url = URL.createObjectURL(file.blob);
+      const link = document.createElement('a');
+      try {
+        link.href = url;
+        link.download = file.filename ?? bundleFilename;
+        document.body.appendChild(link);
+        link.click();
+      } finally {
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      feedback.showSuccess(`Downloaded ${bundleFilename}.`);
+    } catch (err) {
+      feedback.showError(err instanceof Error ? err.message : 'Bundle download failed.');
+    } finally {
+      setBundleDownloading(false);
+    }
   };
 
   const handleContentImport = async (event: FormEvent<HTMLFormElement>) => {
@@ -259,9 +312,9 @@ export function OfflineBundle(): JSX.Element {
               >
                 <option value="">{tokensLoading ? 'Loading tokens…' : 'Select a token'}</option>
                 {tokens.map((token) => (
-                  <option key={token.id} value={token.id} disabled={Boolean(token.revoked_at)}>
+                  <option key={token.id} value={token.id} disabled={Boolean(tokenUnavailableReason(token, tokenClock))}>
                     {token.name}
-                    {token.revoked_at ? ' (revoked)' : ''}
+                    {tokenUnavailableReason(token, tokenClock) ? ` (${tokenUnavailableReason(token, tokenClock)})` : ''}
                   </option>
                 ))}
               </select>
@@ -273,6 +326,16 @@ export function OfflineBundle(): JSX.Element {
             {!tokensLoading && tokens.length === 0 ? (
               <p className="text-sm text-text-muted">
                 No enrollment tokens yet. Create one in Nodes → Enrollment tokens before building a bundle.
+              </p>
+            ) : null}
+            {!tokensLoading && tokens.length > 0 && !hasUsableToken ? (
+              <p className="text-sm text-state-warning" role="status">
+                No usable tokens in this list. Use Enroll to generate a fresh token, then reload tokens, or paste its raw value below.
+              </p>
+            ) : null}
+            {selectedTokenIssue ? (
+              <p className="text-sm text-state-critical" role="alert">
+                The selected token is {selectedTokenIssue}. Select a usable token or clear the selection and paste a fresh token.
               </p>
             ) : null}
 
@@ -333,8 +396,8 @@ export function OfflineBundle(): JSX.Element {
             ) : null}
 
             <div className="flex items-center gap-2 pt-2">
-              <Button type="submit" variant="primary" disabled={tokensLoading}>
-                Download bundle
+              <Button type="submit" variant="primary" disabled={tokensLoading || Boolean(selectedTokenIssue) || bundleDownloading || !effectiveToken} loading={bundleDownloading}>
+                {bundleDownloading ? 'Downloading…' : 'Download bundle'}
               </Button>
               <Button
                 type="button"

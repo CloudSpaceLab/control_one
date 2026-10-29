@@ -1,0 +1,190 @@
+package storage
+
+import (
+	"bytes"
+	"context"
+	"database/sql/driver"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/google/uuid"
+	"time"
+)
+
+type DispatchPatchJobParams struct {
+	TenantID, DeploymentID, NodeID uuid.UUID
+	Mode                           string
+	Payload                        json.RawMessage
+	Plan                           CreateActionPlanParams
+	ApprovalID, ApproverID         uuid.UUID
+	PolicyHash                     string
+}
+
+// A rejected duplicate dispatch must never terminalize an already-linked job.
+func (s *Store) MarkUnlinkedPatchDispatchFailed(ctx context.Context, id uuid.UUID, reason, logTail string) error {
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE node_patch_state SET status='failed',error=$2,log_tail=$3 WHERE id=$1 AND status='pending' AND job_id IS NULL`, id, reason, logTail)
+	return err
+}
+
+// DispatchPatchJob publishes a job only together with its reviewed plan and
+// unique state link. The state lock serializes duplicate approval/wave requests.
+func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) (*NodePatchState, error) {
+	if s.db == nil {
+		return nil, errors.New("store database not initialized")
+	}
+	if p.Mode != "direct" && p.Mode != "proxy" && p.Mode != "airgapped" {
+		return nil, errors.New("unsupported patch dispatch mode")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var lockedNode uuid.UUID
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM nodes WHERE id=$1 AND tenant_id=$2 FOR SHARE`, p.NodeID, p.TenantID).Scan(&lockedNode); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO node_patch_state(deployment_id,node_id,tenant_id,status)
+ SELECT d.id,n.id,d.tenant_id,'pending' FROM patch_deployments d JOIN nodes n ON n.id=$2
+ WHERE d.id=$1 AND d.tenant_id=$3 AND n.tenant_id=$3
+ ON CONFLICT(deployment_id,node_id) DO NOTHING`, p.DeploymentID, p.NodeID, p.TenantID); err != nil {
+		return nil, err
+	}
+	state, err := scanNodePatchState(tx.QueryRowContext(ctx, `SELECT id,deployment_id,node_id,tenant_id,status,packages_upgraded,log_tail,error,job_id,requested_at,applied_at FROM node_patch_state WHERE deployment_id=$1 AND node_id=$2 AND tenant_id=$3 FOR UPDATE`, p.DeploymentID, p.NodeID, p.TenantID))
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]any
+	if err = json.Unmarshal(p.Payload, &payload); err != nil || payload == nil {
+		return nil, errors.New("invalid patch dispatch payload")
+	}
+	payload["node_patch_state_id"], payload["node_id"], payload["deployment_id"], payload["mode"] = state.ID.String(), p.NodeID.String(), p.DeploymentID.String(), p.Mode
+	delete(payload, "action_plan_id")
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if state.JobID != nil {
+		var same bool
+		if err = tx.QueryRowContext(ctx, `SELECT tenant_id=$2 AND type=$3 AND (payload-'action_plan_id')=($4::jsonb-'action_plan_id') FROM jobs WHERE id=$1`, *state.JobID, p.TenantID, "patch.deploy_"+p.Mode, raw).Scan(&same); err != nil {
+			return nil, err
+		}
+		if !same {
+			return nil, errors.New("existing patch dispatch differs from requested policy")
+		}
+		return state, nil
+	}
+	if state.Status != "pending" {
+		return nil, errors.New("patch state already terminal; create a new deployment")
+	}
+	now := s.clock().UTC()
+	if p.ApprovalID != uuid.Nil {
+		if p.PolicyHash == "" {
+			return nil, errors.New("patch approval snapshot required")
+		}
+		var approver any
+		if p.ApproverID != uuid.Nil {
+			approver = p.ApproverID
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE patch_approvals SET status='approved',approved_by=$2,approved_at=$3
+  WHERE id=$1 AND tenant_id=$4 AND deployment_id=$5 AND node_id=$6 AND mode=$7 AND status='pending' AND expires_at>$3 AND policy_hash=$8`, p.ApprovalID, approver, now, p.TenantID, p.DeploymentID, p.NodeID, p.Mode, p.PolicyHash)
+		if err != nil {
+			return nil, err
+		}
+		n, err := result.RowsAffected()
+		if err != nil {
+			return nil, err
+		}
+		if n != 1 {
+			return nil, errors.New("patch approval is no longer pending, current or owned")
+		}
+	}
+	p.Plan.TenantID, p.Plan.NodeID, p.Plan.Domain, p.Plan.ActionKind = p.TenantID, &p.NodeID, "patch", "patch.deploy"
+	p.Plan.IdempotencyKey = "patch_node_state:" + state.ID.String()
+	// Bind plan identities even when the caller did not create the state first.
+	scope := map[string]any{}
+	for k, v := range p.Plan.Scope {
+		scope[k] = v
+	}
+	p.Plan.Scope = scope
+	p.Plan.Scope["node_patch_state_id"], p.Plan.Scope["deployment_id"], p.Plan.Scope["node_id"], p.Plan.Scope["tenant_id"] = state.ID.String(), p.DeploymentID.String(), p.NodeID.String(), p.TenantID.String()
+	sourceRef := map[string]any{}
+	for k, v := range p.Plan.SourceRef {
+		sourceRef[k] = v
+	}
+	p.Plan.SourceRef = sourceRef
+	if p.Plan.Diff == nil {
+		p.Plan.Diff = map[string]any{}
+	}
+	p.Plan.SourceRef["node_patch_state_id"], p.Plan.SourceRef["deployment_id"] = state.ID.String(), p.DeploymentID.String()
+	plan, err := createActionPlan(ctx, tx, p.Plan)
+	if err != nil {
+		return nil, fmt.Errorf("create patch plan: %w", err)
+	}
+	expected, _ := json.Marshal(p.Plan.Diff)
+	actual, _ := json.Marshal(plan.Diff)
+	if !bytes.Equal(expected, actual) || plan.TenantID != p.TenantID || !plan.NodeID.Valid || plan.NodeID.UUID != p.NodeID || plan.State != ActionPlanStateQueued {
+		return nil, errors.New("existing action plan differs or failed; reconciliation required")
+	}
+	payload["action_plan_id"] = plan.ID.String()
+	raw, err = json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	jobID := uuid.New()
+	if _, err = tx.ExecContext(ctx, `INSERT INTO jobs(id,tenant_id,type,status,payload,created_at,updated_at) VALUES($1,$2,$3,'queued',$4,$5,$5)`, jobID, p.TenantID, "patch.deploy_"+p.Mode, raw, now); err != nil {
+		return nil, err
+	}
+	if err = createPatchVerificationTx(ctx, tx, jobID, p.TenantID, p.NodeID, p.DeploymentID, raw); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO job_events(id,job_id,status,message,created_at) VALUES($1,$2,'queued','patch dispatch committed',$3)`, uuid.New(), jobID, now); err != nil {
+		return nil, err
+	}
+	link, err := tx.ExecContext(ctx, `UPDATE node_patch_state SET job_id=$2 WHERE id=$1 AND job_id IS NULL AND status='pending'`, state.ID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	linked, err := link.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if linked != 1 {
+		return nil, errors.New("patch job linkage was not persisted")
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	state.JobID = &jobID
+	return state, nil
+}
+
+// AcquirePatchDeploymentDispatch holds a database session lock across the
+// advance handler's reads and writes. A process/connection failure releases it.
+func (s *Store) AcquirePatchDeploymentDispatch(ctx context.Context, id uuid.UUID) (func(), bool, error) {
+	if s.db == nil {
+		return nil, false, errors.New("store database not initialized")
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	key := "controlone.patch.dispatch:" + id.String()
+	var acquired bool
+	if err = conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, key).Scan(&acquired); err != nil || !acquired {
+		_ = conn.Close()
+		return nil, false, err
+	}
+	release := func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(cleanup, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, key); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		_ = conn.Close()
+	}
+	return release, true, nil
+}

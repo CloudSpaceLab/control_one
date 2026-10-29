@@ -403,4 +403,28 @@ describe('PatchManagement', () => {
     expect(screen.getByText('Patch approval denial failed')).toBeInTheDocument();
     expect(screen.getAllByText('Failed to deny patch approval for node node-123: approval store locked').length).toBeGreaterThanOrEqual(2);
   });
-});
+  it.each([
+    [{ package_scope_available: true, package_allowlist: ['zlib1g'], package_denylist: ['other'] }, 'zlib1g'],
+    [{ package_scope_available: true, package_allowlist: [] }, 'All eligible packages'],
+    [{}, 'Package scope unavailable'],
+  ])('shows approval scope without guessing missing evidence: %s', async (scope, expected) => {
+    mocks.listPatchApprovals.mockResolvedValue({ data: [{ ...sampleApproval, ...scope }], pagination: { total: 1, limit: 100, offset: 0, count: 1 } });
+    const user = userEvent.setup();
+    render(<PatchManagement />);
+    await user.click(await screen.findByRole('button', { name: 'Approvals (1)' }));
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    if ('package_denylist' in scope) expect(screen.getByText('Excluded: other')).toBeInTheDocument();
+  });  it.each([
+    [{ package_allowlist: ['zlib1g'], package_denylist: ['other'] }, 'zlib1g'],
+    [{ package_allowlist: [], package_denylist: [] }, 'All eligible packages'],
+    [{ package_allowlist: null }, 'All eligible packages'],
+    [{}, 'Package scope unavailable'],
+    [{ package_allowlist: 'zlib1g' }, 'Package scope unavailable'],
+    [{ package_allowlist: ['zlib1g'], package_denylist: 'other' }, 'Package scope unavailable'],
+  ])('shows deployment request scope conservatively: %s', async (summary, expected) => {
+    mocks.listPatchDeployments.mockResolvedValue({ deployments: [{ ...sampleDeployment, Summary: summary }] });
+    render(<PatchManagement />);
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Package scope' })).toBeInTheDocument();
+    if ('package_denylist' in summary && Array.isArray(summary.package_denylist) && summary.package_denylist.length) expect(screen.getByText('Excluded: other')).toBeInTheDocument();
+  });});

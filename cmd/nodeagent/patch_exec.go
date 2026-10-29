@@ -152,6 +152,7 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 	if len(env) > 0 {
 		cmd.Env = append(cmd.Environ(), env...)
 	}
+	beforeHealth := collectPatchHealth()
 	output, runErr := cmd.CombinedOutput()
 	logTail := tailString(string(output), 4096)
 
@@ -174,6 +175,9 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 	}
 
 	pkgs := countUpgradedPackages(string(output))
+	health := collectPatchHealth()
+	health.ActiveServices = beforeHealth.ActiveServices
+	health.ServicesComplete = health.ServicesComplete && beforeHealth.ServicesComplete
 	log.Info("patch deployment succeeded",
 		zap.String("job_id", jobID),
 		zap.Int("packages_upgraded", pkgs),
@@ -186,6 +190,7 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 			"packages_upgraded": pkgs,
 			"log_tail":          logTail,
 			"post_patch_rescan": detail.PostPatchRescan,
+			"patch_health":      health,
 		},
 	})
 }

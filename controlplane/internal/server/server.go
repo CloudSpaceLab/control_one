@@ -910,6 +910,7 @@ type durableJobRegistrar interface {
 
 // Server wraps the HTTP server lifecycle for the control plane API.
 type Server struct {
+	vulnerabilityContentMu  sync.RWMutex
 	logger                  *zap.Logger
 	cfg                     *config.Config
 	http                    *http.Server

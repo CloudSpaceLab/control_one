@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/CloudSpaceLab/control_one/internal/contentlock"
 	"io"
 	"net"
 	"os"
@@ -119,6 +120,11 @@ func InstallVerified(ctx context.Context, verified *VerifiedArchive, opts Import
 	if root == "" {
 		return nil, errors.New("offline bundle root dir required")
 	}
+	releaseContent, err := contentlock.Acquire(ctx, root, true)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseContent()
 	if opts.Now.IsZero() {
 		opts.Now = time.Now().UTC()
 	}
@@ -476,6 +482,17 @@ func ListStatusAt(rootDir string, now time.Time) ([]Receipt, error) {
 }
 
 func Activate(rootDir, bundleID string, sequence int64) (*Receipt, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return ActivateWithContext(ctx, rootDir, bundleID, sequence)
+}
+
+func ActivateWithContext(ctx context.Context, rootDir, bundleID string, sequence int64) (*Receipt, error) {
+	releaseContent, err := contentlock.Acquire(ctx, rootDir, true)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseContent()
 	if sequence <= 0 {
 		return nil, errors.New("positive sequence required")
 	}

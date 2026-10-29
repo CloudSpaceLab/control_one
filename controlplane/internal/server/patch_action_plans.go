@@ -19,7 +19,16 @@ func (s *Server) createPatchNodeActionPlan(ctx context.Context, tenantID, deploy
 	if !ok {
 		return uuid.Nil
 	}
-	plan, err := store.CreateActionPlan(ctx, storage.CreateActionPlanParams{
+	plan, err := store.CreateActionPlan(ctx, patchNodeActionPlanParams(tenantID, deploymentID, patchStateID, nodeID, mode, policy))
+	if err != nil {
+		s.logger.Warn("create patch action plan", zap.Error(err), zap.String("deployment_id", deploymentID.String()), zap.String("node_id", nodeID.String()))
+		return uuid.Nil
+	}
+	return plan.ID
+}
+
+func patchNodeActionPlanParams(tenantID, deploymentID, patchStateID, nodeID uuid.UUID, mode string, policy patchPackagePolicy) storage.CreateActionPlanParams {
+	return storage.CreateActionPlanParams{
 		TenantID:   tenantID,
 		NodeID:     &nodeID,
 		Domain:     "patch",
@@ -60,16 +69,7 @@ func (s *Server) createPatchNodeActionPlan(ctx context.Context, tenantID, deploy
 			"deployment_id":       deploymentID.String(),
 			"node_patch_state_id": patchStateID.String(),
 		},
-	})
-	if err != nil {
-		s.logger.Warn("create patch action plan",
-			zap.Error(err),
-			zap.String("deployment_id", deploymentID.String()),
-			zap.String("node_id", nodeID.String()),
-		)
-		return uuid.Nil
 	}
-	return plan.ID
 }
 
 func (s *Server) markActionPlanFailed(ctx context.Context, rawPlanID string) {

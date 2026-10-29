@@ -1,12 +1,112 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+func TestPatchJournalRejectsInconsistentEvidence(t *testing.T) {
+	for name, data := range map[string]string{
+		"empty-job":      `{"":{"action":"patch.deploy_direct"}}`,
+		"unknown-action": `{"job":{"action":"patch.inventory_scan"}}`,
+		"ack-no-result":  `{"job":{"action":"patch.deploy_direct","acknowledged":true}}`,
+		"wrong-job":      `{"job":{"action":"patch.deploy_direct","result":{"action":"patch.deploy_direct","job_id":"other","status":"succeeded"}}}`,
+		"wrong-action":   `{"job":{"action":"patch.deploy_direct","result":{"action":"patch.deploy_proxy","job_id":"job","status":"succeeded"}}}`,
+		"nonterminal":    `{"job":{"action":"patch.deploy_direct","result":{"action":"patch.deploy_direct","job_id":"job","status":"running"}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "patch.json")
+			original := []byte(data)
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := openPatchJournal(path); err == nil {
+				t.Fatal("inconsistent execution evidence accepted")
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(original, after) {
+				t.Fatal("rejected evidence must remain unchanged for reconciliation")
+			}
+		})
+	}
+}
+
+func TestPatchJournalAcknowledgmentWriteFailureRetainsPending(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "patch.json")
+	j, err := openPatchJournal(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := j.reserve("job", patchJobDirect); err != nil || !ok {
+		t.Fatalf("reserve: %v", err)
+	}
+	if err := j.complete(completedAction{Action: patchJobDirect, JobID: "job", Status: "succeeded"}); err != nil {
+		t.Fatal(err)
+	}
+	// Force atomic replacement to fail without changing permissions or live files.
+	blocked := filepath.Join(filepath.Dir(path), "blocked")
+	if err := os.Mkdir(blocked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	j.path = blocked
+	if err := j.acknowledge([]string{"job", "job"}); err == nil {
+		t.Fatal("expected acknowledgment persistence failure")
+	}
+	if j.entries["job"].Acknowledged || j.entries["job"].Result == nil {
+		t.Fatal("failed acknowledgment write discarded the retained unacknowledged result")
+	}
+	if len(j.pending()) != 0 {
+		t.Fatal("a snapshot that cannot persist must not be reported")
+	}
+	j.path = path
+	if len(j.pending()) != 1 {
+		t.Fatal("persisted retry did not restore the pending report")
+	}
+	reopened, err := openPatchJournal(path)
+	if err != nil || len(reopened.pending()) != 1 {
+		t.Fatalf("durable evidence was not retained: %v", err)
+	}
+	if err := j.acknowledge([]string{"job"}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err = openPatchJournal(path)
+	if err != nil || len(reopened.pending()) != 0 {
+		t.Fatalf("acknowledgment retry did not persist: %v", err)
+	}
+	if ok, err := reopened.reserve("job", patchJobDirect); err != nil || ok {
+		t.Fatal("acknowledged work must remain reserved against re-execution")
+	}
+}
+
+// Qualification reads a supplied snapshot but only opens/writes a temporary
+// clone. It must never normalize or recover the enrolled agent's live journal.
+func TestPatchJournalUpgradeCompatibility(t *testing.T) {
+	snapshot := os.Getenv("PATCH_JOURNAL_COMPATIBILITY_FILE")
+	if snapshot == "" {
+		t.Skip("set PATCH_JOURNAL_COMPATIBILITY_FILE to a pre-upgrade journal snapshot")
+	}
+	original, err := os.ReadFile(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := filepath.Join(t.TempDir(), "patch.json")
+	if err := os.WriteFile(clone, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	j, err := openPatchJournal(clone)
+	if err != nil {
+		t.Fatalf("pre-upgrade journal incompatible: %v", err)
+	}
+	after, err := os.ReadFile(snapshot)
+	if err != nil || !bytes.Equal(original, after) {
+		t.Fatal("qualification must not alter the supplied snapshot")
+	}
+	t.Logf("compatible journal: %d entries, %d pending results", len(j.entries), len(j.pending()))
+}
 
 func TestPatchJournalDuplicateAndLostAcknowledgment(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "patch.json")

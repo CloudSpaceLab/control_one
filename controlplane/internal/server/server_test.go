@@ -2549,6 +2549,8 @@ func TestAuthorizeAllowsOperationalRolesForViewerAccess(t *testing.T) {
 }
 
 type fakeStore struct {
+	inventorySync       map[uuid.UUID]storage.NodeInventorySync
+	assessments         []storage.NodeAssessment
 	mu                  sync.Mutex
 	nodes               []storage.Node
 	tenants             []storage.Tenant
@@ -7028,10 +7030,17 @@ func (f *fakeStore) ListNodeVulnerabilityFindings(_ context.Context, filter stor
 	}
 	return out[offset:end], total, nil
 }
-func (f *fakeStore) GetNodeInventorySync(_ context.Context, _ uuid.UUID) (*storage.NodeInventorySync, error) {
+func (f *fakeStore) GetNodeInventorySync(_ context.Context, nodeID uuid.UUID) (*storage.NodeInventorySync, error) {
+	if sync, ok := f.inventorySync[nodeID]; ok {
+		return &sync, nil
+	}
 	return nil, nil
 }
-func (f *fakeStore) UpsertNodeInventorySync(_ context.Context, _ storage.NodeInventorySync) error {
+func (f *fakeStore) UpsertNodeInventorySync(_ context.Context, sync storage.NodeInventorySync) error {
+	if f.inventorySync == nil {
+		f.inventorySync = map[uuid.UUID]storage.NodeInventorySync{}
+	}
+	f.inventorySync[sync.NodeID] = sync
 	return nil
 }
 func (f *fakeStore) TouchNodeInventorySync(_ context.Context, _ uuid.UUID, _ string) (int64, error) {

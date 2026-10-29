@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,10 +20,12 @@ import (
 
 // Store wraps database connectivity and lifecycle operations.
 type Store struct {
-	log   *zap.Logger
-	db    *sql.DB
-	cfg   config.DatabaseConfig
-	clock func() time.Time
+	log             *zap.Logger
+	db              *sql.DB
+	cfg             config.DatabaseConfig
+	clock           func() time.Time
+	publicationOnce sync.Once
+	publicationGate chan struct{}
 }
 
 // GetNode returns a node by ID.
