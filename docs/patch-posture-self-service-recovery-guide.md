@@ -1,6 +1,117 @@
 # Repeat the post-recovery patch verification
 
+> **Proxy status evidence correction, 30 October 2026:** the proxy list now derives its visible status from matching host-policy/job/receipt/proof evidence. Legacy saved installing without a managed job is Legacy / unverified; a new binding without an action is Registered / unverified. Pending requests say Awaiting target result, never imply installation has started. Recorded verification is historical, not continuous health. Real isolated Docker/Squid source/destination/TLS/redirect tests passed again. Full-host/systemd/reboot/power-loss and production acceptance remain open.
+
+> **Repository probe follow-up, 30 October 2026:** proxy readiness now requires HTTP 2xx from the exact reviewed HTTPS URL. Redirects are rejected without following them; login/redirect responses cannot certify readiness. Agent regressions, the production probe through real network-isolated Squid, and five management-dialog tests passed. The existing bound container remains registered/unverified with lifecycle actions unavailable because it lacks systemd. P3-07d/full-host and production gates remain open.
+
+> **Managed proxy workflow, 30 October 2026:** the bounded Ubuntu 24.04 amd64/systemd software path now includes immutable host binding, reviewed policy revisions, explicit client CIDRs, HTTPS repository probes, managed install/reconfigure/remove, transactional receipts and timeout/concurrency guards. Agent/API/database tests, real isolated Squid ACL/TLS tests, 32 UI tests, TypeScript, lint, production UI build and Windows cross-compilation passed. The live lab registration is bound at revision 1 but remains registered/unverified with no lifecycle job: the existing container has no systemd. P3-07g is checked for bounded software evidence; P3-07d/full-host and production rollout acceptance remain open. VM deferral is unchanged. Earlier gate-only/foundation walkthroughs are historical; use the Manage workflow documented below.
+
+> **Proxy durability foundation, 30 October 2026:** bounded P3-07f adds durable agent reservations/results, no replay after restart, a shared patch/proxy mutation lock, expiring target-bound request validation, transactional database job creation/deduplication and authenticated receipt read-back before acknowledgment. Agent, server, dedicated PostgreSQL and existing dispatch regressions passed. Heartbeat delivery reads durable jobs behind an explicit capability gate; public lifecycle actions remain blocked and the current agent does not advertise that capability. Proxy health is not inferred from receipts. P3-07d and overall Phase 3 remain open for public endpoint integration, remote-client ACLs, actual lifecycle/upstream and full-host qualification. VM work remains deferred.
+
+> **Proxy lifecycle safety, 30 October 2026:** proxy registration now records registered status and explicitly saves connection details only. Unqualified install/reconfigure/removal and generic lifecycle job creation reject; legacy workers return an error instead of claiming execution success. Live removal rejection preserved the existing proxy. Bounded P3-07e is checked; P3-07/P3-07d remain open for actual durable lifecycle implementation, remote ACLs, concurrency, upstream and host qualification. VM deferral is unchanged.
+
+> **Management overview navigation, 30 October 2026:** select a tenant, open sidebar Patch posture, then click View management overview beside Refresh. Use Open source view on the detail page to return. The link is available in the selected-tenant operational view; phase acceptance and deferred VM gates are unchanged.
+
+> **VM-dependent work deferred by user, 30 October 2026:** full-host isolation, interruption during installation, power-loss/reboot and host recovery qualification are on hold because the local VM is currently unavailable. Existing acceptance boxes remain unchecked; Phase 3 and production sign-off remain open. Work continues on the existing enrolled lab and isolated tests, beginning with assessment consistency under P4-03. No VM preparation or Windows agent/service change is authorized by this deferral. Bounded P4-03a assessment presentation passed in the selected tenant: shared Control Room coverage warning, saved node assessment/verification and truthful unavailable states; full P4-03 remains open.
+
+> **Offline plan identification, 30 October 2026:** available plans now show the successful preparation request ID and its stable completion time, matched to the exact content digest. Re-preparing the same package version updates those details while keeping one latest plan per machine. Older/manual plans explicitly show unavailable preparation details. [Display behavior and validation](patch-posture-phase3-platforms-2026-10-29.md#offline-plan-preparation-identity---30-october-2026). Phase acceptance gates are unchanged.
+
+> **Airgapped recovery checks, 30 October 2026:** preparation expiry/source revalidation, cancellation, durable late-result receipts and polling reconnection have been hardened. Live app request a01e1d6d expired naturally; 79f7c04d failed after its source was disabled; 4044c310 reported interruption after a controlled agent restart without replay. Fresh request 1ae94861 succeeded and published the selectable plan; all 22 journal entries are acknowledged. Bounded P3-03l is checked. Native signed-repository/failure checks, isolated PostgreSQL tests and 50 focused UI tests passed. Full-host power-loss/reboot/service isolation and production rollout gates remain open. [Acceptance and live recovery evidence](patch-posture-phase3-platforms-2026-10-29.md#airgapped-preparation-recovery-qualification---30-october-2026).
+
+> **App-driven offline preparation, 30 October 2026:** repository registration and Prepare offline plan are implemented and deployed to the existing lab. Administrators register the trusted Ubuntu source; operators request exact package versions through the app. Preparation never authorizes installation. The missing-content request failed safely; a fresh app preparation succeeded without installing packages. Its separately approved deployment 1d1fd425 completed APPLIED / PKGS 0, with later unknown verification and blocked promotion. Bounded acceptance P3-03k is checked. Manual staging and JSON import remain available. [Procedure, security contract and live evidence](patch-posture-phase3-platforms-2026-10-29.md#app-driven-offline-preparation---30-october-2026). Full-host/production gates stay open.
+
+> **Agent-published offline plans, 30 October 2026:** the app now defaults to agent-published plan selection; manual JSON import remains available. Staging publishes the latest validated plan through the enrolled agent heartbeat, with a five-minute server receipt lease and approval/dispatch revalidation. App-approved lab requests 140f0755 and final guarded 3c10d82f completed APPLIED / PKGS 0 (same-version reinstalls), with later unknown verification and blocked promotion. This qualifies bounded discovery/selection, not full production readiness. [How entries are created, operator steps, tests and limits](patch-posture-phase3-platforms-2026-10-29.md#agent-published-offline-plans---30-october-2026).
+
+> **Live offline qualification, 30 October 2026:** the existing Ubuntu 24.04 amd64 lab passed app plan import, mandatory approval and a real offline upgrade (74fbbc9f, APPLIED / PKGS 2). A separate corrupted-archive request (0e42a303) failed before installation; after restoring verified bytes, a freshly approved recovery request (17e6eb2f) completed APPLIED / PKGS 0. Later complete inventory retained verification unknown (no security baseline), with promotion blocked. Bounded software workflow P3-03i is checked; P3-03e/parent P3-03 and full-host/production gates remain open. [Current implementation and evidence](patch-posture-phase3-platforms-2026-10-29.md#live-offline-workflow---29-october-2026). Earlier all-offline-blocked checkpoints below are historical.
+
+> **Phase 3 checkpoint, 29 October 2026:** P3-02 runtime/mode availability and pre-approval rejection gates are locally qualified. Live offline request 23b92d9c created no approval/job; separately approved Linux/apt proxy request 45754a16 completed APPLIED / PKGS 0 with promotion correctly blocked. Current agent IP 172.19.0.2 is now distinguished from enrollment/configured IP 172.19.0.3. [Matrix, implementation, live steps and remaining qualification](patch-posture-phase3-platforms-2026-10-29.md). Overall Phase 3, full-host and production gates remain open. Earlier demonstration documentation was committed as 9d400d58; this implementation checkpoint is uncommitted.
+
 > **Fresh live demonstration, 29 October 2026:** New app-approved deployment b4e48dd8 completed APPLIED / PKGS 0; later assessment 4788a20d produced verification unknown (no security baseline), with promotion blocked. Signed repository refresh, isolated security/reconciliation tests and fresh live-database restoration passed. The temporary proxy ACL was repaired for the changed lab IP; original direct/no-proxy settings were restored. [Exact steps, evidence and pending gates](patch-posture-self-service-recovery-guide.md#fresh-live-workflow-demonstration--29-october-2026). Phase acceptance is unchanged; remaining host/platform/production gates stay open.
+
+## Prepare an offline plan from the app - 30 October 2026
+
+This is now the normal operator workflow for the declared Ubuntu 24.04 amd64 profile. The command-line procedure below remains available as an advanced/manual fallback. The software has been exercised on the existing lab; full-host and production rollout qualification remains open.
+
+### Administrator setup and content transfer
+
+1. Enroll the target in the correct tenant using the existing procedure and deploy an approved agent supporting `offline_prepare_version: 1`. Keep its authenticated internal Control One connection available while upstream package access is isolated.
+2. Open **Patch posture → Deploy patches… → airgapped → Agent-published plan → Prepare a new offline plan**. Select **Preparation target**. This does not select or authorize an installation.
+3. Expand **Administrator: register approved repository**. Enter a clear repository name, independently trusted SHA-256 of the existing Ubuntu archive keyring, matching suite (for example noble-updates) and component (for example main). Enable preparation and save. This API requires administrator access to the target's tenant; ordinary operators cannot register replacement trust configuration.
+4. The app shows **Content destination on this machine**, derived from the server-assigned repository UUID: `/var/cache/control-one/offline-sources/<repository-id>/repository`. Transfer the approved vendor-signed repository metadata/indexes plus selected package archives and all dependencies there through the site's controlled transfer process. Root owns/protects the tree. Registration itself does not download anything. Do not paste our lab hash into another environment without verifying its trusted keyring.
+
+### Operator preparation, review and installation
+
+5. In **Exact packages to prepare**, enter exact selections such as `libudev1=255.4-1ubuntu8.18`, separated by spaces, commas or newlines. This is the lab example, not a recommendation for every client. Click **Prepare offline plan**. No terminal staging command or JSON upload is needed for this step.
+6. Watch **Preparation: running → succeeded/failed** and its request ID. The app polls the target-scoped result. A missing directory, invalid signature, missing dependency, changed registration, incompatible/stale runtime or expired request must fail; repair the cause and create a fresh request. The old failure remains in job history. Preparation is bounded to the approved source and local signed content, uses the durable journal and does not run an installation command.
+7. On success the published-plan list refreshes. The option includes the preparation request ID and completion time; select it to see the full ID. Re-preparing the same content updates these details in the same machine option. Older/manual plans can show Preparation details unavailable until a fresh app preparation records them. If the agent has not sent its next heartbeat yet, click **Refresh plans** after that heartbeat (60 seconds in this lab). Select the machine/package plan. The app selects exactly one installation target and shows exact requested/resolved versions and integrity checks.
+8. Review that plan, give a reason and click **Deploy to 1 node**. This creates a separate installation request in **Approvals**. Review the target and exact plan there before approving. **Preparing a plan is never installation approval.**
+9. Open the new request's **Per-node** result; use **Refresh result**, **Approved offline content plan** and **Execution log**. Check Status, PKGS and later inventory/verification separately. A same-version reinstall can report APPLIED / PKGS 0, with unknown verification and blocked promotion if no security baseline exists.
+
+### Recover a failed preparation
+
+1. Return to **Patch posture -> Deploy patches... -> airgapped -> Agent-published plan -> Prepare a new offline plan** and select the same preparation target. The latest request and its terminal message load from the server, including after a browser refresh.
+2. Read the failure before retrying. A timeout means the ten-minute request expired; verify the agent is connected and inspect staged content. A changed/disabled repository means an administrator must confirm the approved registration. An interrupted preparation means the agent restarted after reserving work; it deliberately does not replay that request. Missing or invalid content requires repairing the signed local repository and dependencies through the controlled transfer process.
+3. Keep the failed request ID for the audit record. Do not edit the job, delete the agent journal, bypass signing or reuse its installation approval. A temporary connection error shows automatic retry; a recovered connection clears that polling error without erasing the actual failed result.
+4. Once the cause is repaired, enter the intended exact package versions and click **Prepare offline plan** to create a fresh request. Wait for **Preparation: succeeded. Offline plan prepared; no packages installed**. If the next agent heartbeat has not published the plan yet, use **Refresh plans** after it arrives.
+5. Select the fresh available plan, review its requested and resolved package versions, target and integrity checks, then submit a separate installation request for approval. Preparing a plan changes no installed packages.
+
+The controlled 30 October lab demonstration followed these steps: natural expiry a01e1d6d, disabled-source rejection 79f7c04d, interrupted reservation 4044c310, and fresh success 1ae94861. All 22 journal records were acknowledged and the package database remained unchanged. Deliberate agent stopping/restarting was lab fault injection, not a routine production operator step. Full-host installation interruption, power-loss and reboot qualification remains open. See the [recovery acceptance evidence](patch-posture-phase3-platforms-2026-10-29.md#airgapped-preparation-recovery-qualification---30-october-2026).
+
+**Fallback:** choose **Manual JSON import** when using a public plan generated on the intended target through the retained `offline-stage` command. Both sources retain mandatory installation approval and all installer checks. An app preparation failure does not erase an older valid published plan, so review exact scope/digest rather than assuming any visible option came from the failed request.
+
+## Create an agent-published plan on a target - 30 October 2026
+
+The plan picker is now the normal app path. The signed package repository must still be prepared/transferred by an administrator; the app does not automatically fetch or build it. The current tested profile is Ubuntu 24.04 amd64. Production rollout remains subject to the open acceptance gates.
+
+1. Enroll the intended target in the correct tenant using the existing enrollment procedure. Use a qualified agent build supporting published plans, and verify its authenticated heartbeat to the site's internal Control One endpoint. Docker is only our lab transport; a real Ubuntu server uses its administrator terminal/SSH session.
+2. Through the site's controlled transfer process, place approved vendor-signed repository metadata, indexes, selected `.deb` files and all required dependencies in a protected local directory. Verify the trusted public keyring/pin through an independently trusted process. Match release, architecture and exact versions; do not copy our lab's paths/hashes blindly.
+3. As root on the target, run the installed agent's `offline-stage` command, using that host's existing configuration. For illustration only (replace the binary/config/repository paths, trusted hash and package version with verified site values):
+
+```sh
+sudo /path/to/installed/controlone-agent offline-stage \
+  --config /path/to/existing/nodeagent.yaml \
+  --repository /srv/controlone/approved-apt \
+  --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg \
+  --keyring-sha256 TRUSTED_KEYRING_SHA256 \
+  --suite noble-updates --component main \
+  --packages PACKAGE_NAME=APPROVED_EXACT_VERSION
+```
+
+Do not paste the placeholders unchanged. Successful staging publishes the latest local plan pointer and also prints public JSON. It does not install packages. For manual transfer, redirect successful output to a JSON file and retain it securely; do not substitute the agent configuration file.
+
+4. Wait for the target's next heartbeat (60 seconds in this lab), then open the correct tenant → Patch posture → Deploy patches… → airgapped. Leave Plan source **Agent-published plan**. Click **Refresh plans** and select the machine/package option. It automatically selects one target and displays the requested/resolved exact versions. An absent plan means discovery is not ready: inspect staging success, agent capability/connectivity and freshness; do not enter a fabricated option.
+5. Review the exact dependency list, machine identity and integrity checks. Submit, then review/approve in Approvals. A fresh heartbeat renews discovery freshness without changing the approved content identity. A different plan or source requires new review.
+6. Open the new deployment's Per-node result. Inspect Status, PKGS, retained Approved offline content plan, execution log and later inventory/verification. APPLIED / PKGS 0 means a same-version operation can have succeeded; it is not a proven vulnerability fix. The observed 140f0755 request completed through this flow without a file upload.
+7. For controlled transfer/troubleshooting, choose Plan source **Manual JSON import** and load the public file generated on the intended target. Mandatory approval and all installer checks remain. After a baseline change, content change, expiry or withdrawal, restage and submit a fresh request; do not edit old history.
+
+## Repeat the approved offline workflow - 30 October 2026
+
+Use this workflow for the qualified **Ubuntu 24.04 amd64 / apt** lab profile. It does not enable offline installation on Windows, dnf/yum or an older agent. The target must have no active default/public route and an independently isolated network which still permits its authenticated Control One connection. A route check alone cannot prevent a permitted local host acting as an upstream relay.
+
+1. **Verify the target.** In Local Development, open Servers → phase0-ubuntu-lab. Confirm its full ID `d033fa85-5796-48ae-8e8a-f82706387326`, advancing heartbeat and current package inventory. Record the installed version. The observed final agent is `phase3-offline-apt-route-20261029`; the runtime must report `offline_apt_version: 1`. This avoids approving for the wrong host or an incompatible installer.
+2. **Prepare signed content outside the browser.** An administrator supplies the vendor-signed Release/index plus all selected archives and dependencies on the isolated target. Pin the trusted public keyring hash through a trusted channel. Do not disable signature checks or copy private enrollment files into the repository. The browser imports a public plan, not the repository itself.
+3. **Stage using the existing agent binary as root.** For this existing Docker lab, run the command below in Windows PowerShell. It uses the already prepared repository; it does not download newer content or install packages. The hash is this lab's recorded keyring hash, not a universal future value.
+
+```powershell
+$dockerExe = Join-Path $env:LOCALAPPDATA 'Programs\DockerDesktop\resources\bin\docker.exe'
+& $dockerExe exec controlone-phase0-enrolled-lab-20261020 /usr/local/bin/controlone-agent.candidate offline-stage `
+  --config /etc/control-one/nodeagent.yaml `
+  --repository /tmp/controlone-offline-install-fixture/repository `
+  --keyring-sha256 80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31 `
+  --suite noble-updates --component main --packages libudev1=255.4-1ubuntu8.18 |
+  Set-Content -Encoding utf8 tmp/local/patch-posture-demo/phase3-offline-20261029/operator-offline-plan.json
+if ($LASTEXITCODE -ne 0) { throw 'Offline staging failed; do not submit the output.' }
+```
+
+The staged snapshot lives under root-protected `/var/cache/control-one/offline-patches/<manifest digest>`. Public archives are readable by APT's sandbox user; private agent state permissions are preserved. The plan binds the installed package database, trusted keyring, exact requested/resolved versions and every staged file. Signed metadata can expire: prepare fresh vendor-signed content when required; do not turn expiry verification off.
+
+4. **Review in the app.** Open Patch posture → Deploy patches… → Mode **airgapped**. Select **only phase0-ubuntu-lab**, give a clear reason, and choose the generated JSON under **Offline content-plan file**. Read the requested version and the entire resolved dependency list. Inventory refresh is mandatory. The earlier real upgrade selected libudev1 and resolved libsystemd0 too; the later same-version recovery resolved only libudev1. Dependency plans depend on the current baseline.
+5. **Submit, then approve the exact plan.** Click Deploy to 1 node. In Approvals, inspect the node, exact versions and content/machine integrity checks before Approve. An offline request always requires approval. A changed baseline/content/runtime or expired evidence must be restaged and reviewed; approval is not permission to install arbitrary later content.
+6. **Watch the execution.** Open Deployments → the new request's **Per-node**. Identify it using time, package scope and deployment ID. Click **Refresh result** as needed. Expand **Approved offline content plan** to compare the retained versions, and **Execution log** to inspect local file acquisition. The server does not create a runnable offline job before approval.
+7. **Read three separate results.** **Status** says whether execution applied or failed. **PKGS** is the number whose installed version actually changed, not the number requested or reinstalled. **Verification / Promotion** says whether later evidence supports remediation and onward rollout. APPLIED / PKGS 0 can be a successful reinstall; APPLIED alone does not prove a finding was fixed. Check fresh inventory, dpkg health, assessment coverage and any reboot/service requirements.
+8. **Handle rejection without replaying history.** On 30 October, request 0e42a303 rejected a deliberately corrupted archive before installation and retained its failed result. After the administrator restored the verified original archive and restaged, a *new* request 17e6eb2f received its own approval and completed APPLIED / PKGS 0. Do not change a failed row to applied, clear the journal or reuse its old job. Do not reproduce intentional corruption on a client/production machine.
+
+For the real upgrade, inspect **29 October 16:42:23 / 74fbbc9f**, which changed libsystemd0 and libudev1 from `255.4-1ubuntu8.17` to `255.4-1ubuntu8.18` and reported **PKGS 2**. For the integrity failure, inspect **30 October 07:13:04 / 0e42a303**. For restored recovery, inspect **30 October 07:21:00 / 17e6eb2f**. Times are Africa/Lagos. Later recovery inventory contained 109 packages; verification correctly remained unknown (no security baseline), with promotion blocked. Full-host reboot/power-loss and finding-backed remediation remain separate acceptance gates.
 
 ## Fresh live workflow demonstration — 29 October 2026
 
@@ -221,3 +332,119 @@ No new token, package upgrade, Windows service replacement, PS1, commit or push 
 7. If a package is missing or an unknown peer exists, retain the finding and investigate inventory completeness/version provenance. Do not manually mark it fixed to make the dashboard green. A trusted complete removal contract and post-install verification are still pending acceptance items.
 
 The adversarial signed-feed and rollback cases were run in isolated fixtures and the dedicated disposable test database. They were not seeded into the live tenant or simulated by uninstalling a package from this enrolled lab. Screenshot: tmp/local/patch-posture-demo/phase2-reconciliation-20261028/reconciliation-limits-live.png.
+
+## Phase 3 proxy recovery and calendar safety follow-up
+
+Actual stopped-proxy failure and a fresh separately approved recovery were demonstrated in the app. Proxy activation validates before replacement and recovers failed activation; calendar-only windows bind start bounds while unqualified network windows are blocked. Force-close does not claim physical firewall closure or stop running installations. Offline/platform/full-host/proxy lifecycle gates remain open. See [latest evidence and steps](patch-posture-phase3-platforms-2026-10-29.md#proxy-recovery-and-calendar-safety-follow-up) and [acceptance checkboxes](patch-posture-phase-acceptance.md#phase-3-proxy-recovery-and-calendar-safety-follow-up).
+
+The live calendar follow-up also exposed and fixed missing worker enqueue. Queue-level tests passed; the app demonstrated OPEN followed by force-closed CLOSED, and obsolete demonstration jobs were cancelled through Jobs. P3-05d records this bounded evidence; complete Phase 3 remains open.
+
+Compatibility follow-up: new windowed jobs require the authenticated agent runtime capability `calendar_window_start_check`. Older agents cannot silently ignore the new bounds. The capability is bound to approval/dispatch and independently rechecked under the node lock; ordinary unwindowed paths keep their existing availability. See the Phase 3 tracker for the final deployed qualification.
+
+## Client demonstration with realistic reasons
+
+Live explanatory walkthrough: 29 October 2026, Local Development, existing Ubuntu lab only. The fresh activities were a calendar example and an explicitly declined training request. Earlier actual proxy failure/recovery and offline rejection records were reopened in the live app; those executions were not rerun. No package installation was authorized by this walkthrough.
+
+| Feature | Realistic example and purpose | Demonstrated result or boundary |
+| --- | --- | --- |
+| Calendar window | A reporting team approves a 30-minute maintenance period after reports finish. | Created the lab-only example for 12:15-12:45 Africa/Lagos; action history confirms successful open and normal close. Final CLOSED, not force-closed. A window record alone neither installs packages nor associates itself with node patch configuration. |
+| Explicit node/mode/package scope | A change is intended only for one reporting server and liblzma5, rather than every active node or all packages. | Fresh request showed one lab, direct mode, liblzma5 and an approval expiry. Required dependencies may also change. |
+| Approval and denial | The maintenance team postpones a proposed change before installation is authorized. | The training request was deliberately denied in the app. Its execution job ID is NULL, and its reason is patch approval denied. FAILED here represents denial, not a package-manager fault. |
+| Required proxy selection | A company requires repository traffic through a named proxy. | Selecting proxy without a repository proxy disabled Save. Selecting the existing proxy enabled Save; the draft was then discarded without saving. |
+| Connection failure | The approved proxy becomes unavailable. | Reopened actual earlier request f9eeb539: strict refresh failed with exit 100, no installation followed, promotion blocked. Read the reason to distinguish this from denial. |
+| Fresh recovery request | Connectivity is restored and the operator reviews the change again. | Reopened a7347784: APPLIED / PKGS 0, because liblzma5 was already current. This is execution success, not a new package upgrade. |
+| Verification and promotion | Before updating more reporting servers, required package, security and application health evidence must be established. | The successful record remains verification unknown / promotion blocked. Package-command success does not establish complete host health or remediation. |
+| Proxy readiness | A proxy entry exists, but its process/ACL/upstream route may not work. | The Proxies page explicitly distinguishes recorded status from a live connection check. Its existing INSTALLING entry is not presented as healthy. |
+| Offline restriction | A disconnected site must consume only approved local repository content. | Reopened the airgapped request 23b92d9c; its safety gate blocks execution until offline repository isolation is qualified. |
+| Safe configuration activation and older agents | A bad proxy configuration must not destroy a working setup; an older agent must not ignore calendar bounds. | These are automatic backend protections qualified with the earlier isolated parser/rollback/capability tests. This walkthrough did not inject a new live proxy failure or modify an older/Windows agent. |
+
+### Repeat the app walkthrough
+
+1. Select Local Development and open Patch posture. The Windows tab means maintenance windows, not Microsoft Windows.
+2. Choose Windows, Schedule window; supply a clear demo name, current local bounds and only the disposable lab node ID. Leave repositories empty for the calendar-only path. Schedule and open the record; refresh until the state changes. Close it after the demonstration and preserve its history. An associated node configuration is required for a patch request to use a window; membership alone is not that association. The current per-node editor does not expose window assignment, so do not present this record-only demonstration as a window-bound installation.
+3. In Deployments, locate 29 October at 10:57:41, open Per-node and read the proxy failure. Compare with 11:09:00: APPLIED / PKGS 0 / verification unknown / promotion blocked. These are retained real executions, not fresh runs.
+4. Open Config on the lab row. Explain direct, proxy and blocked airgapped modes. Select proxy without choosing a repository proxy to show disabled Save; select a proxy to show the explicit requirement is satisfied. Close without saving this teaching draft. Current settings affect future requests; they do not rewrite old deployment history.
+5. Open Proxies and read its recorded-status warning. A queued or saved configuration is not proof of connectivity. Automatic rollback is not an interactive button on this page.
+6. For an approval-only demonstration, choose Deploy patches, select only the lab, enter liblzma5, retain inventory refresh and write an explicit training-only reason that says the request will be declined. Submit once. Do not select all nodes or leave the package allowlist empty in this bounded demonstration.
+7. In Approvals check Node, Mode and Package scope, plus expiry. Choose Deny and confirm for the training request. Verify Approvals returns to zero, then open its Deployment/Per-node reason. A real approved installation is a separate action requiring the intended reviewed scope and a working qualified route.
+
+Fresh evidence: window `8339e35f-701a-4541-aa4c-437dc01d1fed`, named Client demo - reporting server maintenance (lab only); open job `8776a9d2-a234-4a4a-81f0-b988c65b9519` and close job `0e28588d-786f-4b09-acaf-1a2b216fae72` succeeded. Its force_closed_at remains NULL; no force-close is claimed for this example. A transient browser-control mismatch occurred while opening; actual action history was checked before interpreting the final CLOSED state.
+
+Fresh training deployment `51c41a00-438b-40ae-9f4a-076ccc252f5a`, requested at **12:21:29 Africa/Lagos**, was intentionally denied, retained as failed with patch approval denied, and has no execution job. The lab still uses direct/no-proxy/no-window. The installed-package database and 12-entry acknowledged journal hashes stayed unchanged; no new installation or agent/configuration change occurred. Read-only database proof is `client-demo-final-proof.jsonl` in the ignored Phase 3 evidence directory.
+
+Screenshots in `tmp/local/patch-posture-demo/phase3-20261029/`: `client-demo-calendar-closed.png`, `client-demo-failure-explained.png`, `client-demo-recovery-explained.png`, `client-demo-proxy-choice-required.png`, `client-demo-proxy-readiness.png`, `client-demo-pending-approval.png`, `client-demo-denied-no-install.png`. These private artifacts remain excluded from commits. Phase 3 acceptance is unchanged by this explanatory walkthrough; outstanding platform/offline/full-host/proxy lifecycle obligations remain open.
+
+## Offline repository foundation - 29 October 2026
+
+The existing Ubuntu container passed signed file-only APT refresh and read-only package simulation using the new `internal/offlineapt` package. Normal source parts, ambient APT configuration/hooks/proxy variables and network acquisition methods were excluded. The native positive case refreshed actual Ubuntu signed metadata with the existing proxy stopped; the HTTP trap and injected command hook were unused. Invalid signatures, changed or missing indexes, unavailable repositories, expired signed metadata and an unavailable package were rejected. A failed refresh also invalidated simulation eligibility despite retained index files.
+
+This is checked as bounded P3-03g only. It does not implement or qualify offline package installation. P3-03e, parent P3-03 and Phase 3 remain open; the app continues refusing offline execution. [Detailed implementation, evidence and remaining work](patch-posture-phase3-platforms-2026-10-29.md#offline-repository-foundation---29-october-2026). No new VM, dependency, PowerShell script, enrollment or credential was created. Local test artifacts remain excluded from commits.
+
+## Offline snapshot and archive checkpoint - 29 October 2026
+
+Bounded P3-03h passed on the existing Ubuntu lab: exact requested versions and staged repository bytes are pinned to a manifest digest, with keyring and installed-state baseline checks. Real file-only archive acquisition passed with the proxy stopped; changed/missing archives, unavailable versions and an isolated missing-dependency case were rejected. These were simulation/download-only checks. Approval/dispatch integration, complete resolved dependency manifest, real offline installation and recovery remain open under P3-03e; airgapped execution remains blocked in the app. [Implementation and exact evidence limits](patch-posture-phase3-platforms-2026-10-29.md#offline-snapshot-and-archive-checkpoint---29-october-2026).
+
+## Offline approval identity follow-up - 29 October 2026
+
+The offline content identity is now carried in source through the request/persisted deployment policy, approval policy hash, action-plan diff, approval response and agent payload. It includes the manifest, installed-state and keyring hashes, repository selectors and exact requested versions. Changed identity fields alter the approval hash; malformed/mixed-mode content is refused. Snapshot preflight requires all approved fields to match its staged identity. Storage now unconditionally blocks offline dispatch even when legacy payloads omit runtime evidence, and the obsolete default-path dispatch fallback was removed.
+
+This is tested preparatory plumbing, not an enabled offline workflow. No offline approval or install is allowed; no new acceptance parent was closed. Protected persistent staging, resolved dependency closure, operator review, actual install/journal/recovery integration and real remediation evidence remain required under P3-03e. [Detailed implementation and validation](patch-posture-phase3-platforms-2026-10-29.md#offline-approval-identity-follow-up---29-october-2026).
+
+
+## Review patch assessment without a VM - 30 October 2026
+
+1. Select the intended tenant. Open Patch posture and read its assessment coverage warning before interpreting finding counts.
+2. From sidebar **Patch posture**, click **View management overview** beside Refresh. This opens the Control Room patch detail at `/console/control-room/patch-posture`. Use **Open source view** there to return to patch operations. Check the same coverage warning. Deployment counts and its activity score describe operations; they do not certify a clean or fully assessed estate. Refresh reloads coverage as well as the detail data.
+3. Open Servers -> the intended node -> Recommendations. Read Assessment and its saved time, known matches, inventory completeness and coverage limitations before interpreting recommendations. The lab example has 109 package inputs and zero known matches while assessment remains partial.
+4. Read Execution and verified outcome separately. Healthy package audit does not supply missing service/reboot evidence. Expand verification records to inspect the saved execution outcome and promotion decision.
+5. An empty recommendation list does not establish that patching is unnecessary. An unavailable/error state requires restoring the data connection and reloading or reopening the tab; do not treat it as zero recommendations or a verified fix.
+
+The VM-dependent acceptance checks remain deferred at the user's request. This procedure uses existing saved evidence and does not install packages or close full-host production gates.
+
+
+## Register an existing proxy - 30 October 2026
+
+1. Select the intended tenant, open Patch posture -> Proxies -> Register proxy.
+2. Enter the approved existing proxy host, port and repository host list. Registration saves details only. It does not install Squid, change its ACLs, establish remote-client authorization or verify upstream access.
+3. A new registration is recorded as registered with no validation timestamp. Verify repository connectivity independently from the intended target before reviewing any proxy-mode patch deployment. Historical status is not current readiness.
+4. Managed installation, reconfiguration and removal currently return lifecycle unavailable. Keep the existing proxy/configuration intact; do not treat a queued or recorded status as proof of target work. Durable lifecycle execution and recovery remain P3-07d.
+
+The live rejection demo retained the existing proxy and showed its failure reason. The registration draft was cancelled, so no new record or software installation was created.
+
+
+## Proxy durability checkpoint demonstration - 30 October 2026
+
+This checkpoint verifies the safety boundary while remote lifecycle remains disabled. It does not demonstrate successful remote installation/removal.
+
+1. Select Local Development, open Patch posture, then Proxies. Read the lifecycle-unavailable notice. Registered or historical status is not a live connectivity proof.
+2. In this disposable lab only, the retained proxy removal action returns an explicit unavailable error. Confirm that the record remains and cancel the dialog. Do not interpret the error as a queued or completed removal.
+3. Open Servers and locate phase0-ubuntu-lab. Confirm recent heartbeat and agent version phase3-proxy-journal-20261030. Existing enrollment and installed packages were preserved.
+4. Review P3-07f in the acceptance checklist for the bounded durable journal/database/receipt tests. Keep P3-07d unchecked: public endpoint integration, qualified capability advertisement, actual lifecycle, client ACLs and upstream qualification remain pending.
+
+[Exact changes, test artifacts, hashes, live evidence and remaining work](patch-posture-phase3-platforms-2026-10-29.md#proxy-durability-foundation---30-october-2026).
+
+
+## Managed proxy workflow - 30 October 2026
+
+Use this workflow instead of the earlier gate-only removal demonstration. The current container lab supports registration/binding and truthful eligibility checks; actual managed service execution requires the declared Ubuntu/systemd host profile.
+
+1. Select the correct tenant and open Patch posture -> Proxies. Register the enrolled proxy host's exact hostname on port 3128, with approved repository hosts. Registration records details; it installs nothing.
+2. Click Manage on that record. Select the matching enrolled machine and verify its node ID against Servers. Binding is immutable and prevents substituting another machine in later requests.
+3. Enter approved client CIDRs. The local demonstration uses 127.0.0.1/32, which grants no remote-client access. A production example such as 10.20.30.0/24 must be approved for that tenant's actual client network; it is not a universal default. Enter HTTPS probes for approved repository hosts using the host's managed certificate trust.
+4. Bind management host. The app saves revision 1 and checks current runtime eligibility. The lab displays Host qualification required because it has no systemd; review buttons are disabled and no job is queued. Do not work around this by editing capability labels.
+5. On a suitable disposable systemd host, a new installation also requires an exact Squid version from the approved repository/change plan. Review installation shows the bound node, revision, repositories, clients, probes and version. Required dependencies may be installed. Submit only after reviewing that scope.
+6. For an existing configuration, use Review reconfiguration. The agent preserves the original configuration privately, checks ownership/drift, parses before activation and verifies service/listener/HTTPS access. Changing policy requires a new revision and review; retries cannot silently expand scope.
+7. Follow Latest proxy job until terminal. Running means pending; succeeded means the recorded action passed its required proof, not continuous health or fleet production readiness. Inspect the recorded validation time and actual repository access from a client before a patch rollout.
+8. Before removal, reassign every proxy-mode client in its per-node settings. Review removal explains that it stops/disables/masks the managed service and restores the original configuration while retaining packages and history. Failed or unknown removal is not success.
+9. On expiry, agent restart, drift or failed cleanup, inspect the target's package-manager/service/configuration state and retained journal/marker. Do not delete the journal, manually mark an unknown operation successful or automatically repeat its installation. Use a fresh reviewed recovery only after the original action has a reconciled target receipt. Unverified installations stay persistently masked; operator recovery must account for that mask and the original configuration backup.
+10. Retired bindings, addresses and private ownership records retain history. Re-provision through a fresh reviewed registration/binding and reconfiguration of the verified restored baseline, rather than reusing an old job.
+
+[Implementation, exact retained tests, live record IDs and remaining host qualification](patch-posture-phase3-platforms-2026-10-29.md#managed-proxy-implementation-and-qualification---30-october-2026).
+
+
+Repository probe clarification: choose the approved HTTPS resource that returns HTTP 2xx directly. A 301/302/307/308 redirect, authentication page redirect or HEAD error will fail readiness. Review and authorize the final repository URL explicitly rather than disabling certificate checks or enabling automatic redirect following.
+
+
+Proxy list status clarification: Legacy / unverified means the historical saved status lacks managed lifecycle evidence. Registered / unverified means details or host binding exist without an installation request. Awaiting target result identifies a real pending job but does not assert installation started. Verification recorded means the retained checks passed at the displayed time; verify current client access before rollout. Missing evidence must never be interpreted as a healthy proxy.
+
+Docker can run the real proxy/client/repository and durable software fixtures. The existing ordinary enrolled container has no systemd, so its lifecycle controls remain unavailable. Container restart evidence is not host reboot or power-loss evidence; keep those acceptance checks open.

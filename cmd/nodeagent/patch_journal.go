@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // Each job is reserved durably before starting. Interrupted commands are never
@@ -58,6 +60,12 @@ func openPatchJournal(path string) (*patchJournal, error) {
 	for id, entry := range j.entries {
 		if entry.Result == nil {
 			entry.Result = &completedAction{Action: entry.Action, JobID: id, Status: "failed", Error: "agent restarted during reserved patch execution; outcome unknown, manual reconciliation required"}
+			if entry.Action == "patch.prepare_offline" {
+				entry.Result.Error = "preparation interrupted; no installation authorized; inspect staged content and submit a fresh preparation request"
+			}
+			if patchsupport.IsProxyLifecycle(entry.Action) {
+				entry.Result.Error = "agent restarted during reserved proxy action; service/configuration outcome unknown; inspect target and submit a fresh authorized request, never replay"
+			}
 			j.entries[id] = entry
 		}
 	}
@@ -68,7 +76,7 @@ func openPatchJournal(path string) (*patchJournal, error) {
 }
 
 func validatePatchJournalEntry(id string, entry patchJournalEntry) error {
-	if strings.TrimSpace(id) == "" || !isPatchDeploymentAction(entry.Action) {
+	if strings.TrimSpace(id) == "" || !isDurablePatchAction(entry.Action) {
 		return errors.New("patch reservation identity required")
 	}
 	if entry.Result == nil {
@@ -248,4 +256,8 @@ func (j *patchJournal) acknowledge(ids []string) error {
 
 func isPatchDeploymentAction(action string) bool {
 	return action == patchJobDirect || action == patchJobProxy || action == patchJobAirgapped
+}
+
+func isDurablePatchAction(action string) bool {
+	return isPatchDeploymentAction(action) || action == "patch.prepare_offline" || patchsupport.IsProxyLifecycle(action)
 }

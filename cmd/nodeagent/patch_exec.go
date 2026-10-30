@@ -14,6 +14,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/offlineapt"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // Patch job type strings — duplicated agent-side so the dispatcher can
@@ -28,18 +30,22 @@ const (
 // patchActionDetail mirrors the server-side patchJobPayload. The id fields
 // drive heartbeat correlation; ProxyURL / StagedRepoPath are mode-specific.
 type patchActionDetail struct {
-	NodePatchStateID string   `json:"node_patch_state_id"`
-	NodeID           string   `json:"node_id"`
-	DeploymentID     string   `json:"deployment_id"`
-	Mode             string   `json:"mode"`
-	PackageAllowlist []string `json:"package_allowlist,omitempty"`
-	PackageDenylist  []string `json:"package_denylist,omitempty"`
-	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
+	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
+	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
+	Window                     *patchsupport.Window         `json:"patch_window,omitempty"`
+	Runtime                    *patchsupport.Runtime        `json:"patch_runtime,omitempty"`
+	NodePatchStateID           string                       `json:"node_patch_state_id"`
+	NodeID                     string                       `json:"node_id"`
+	DeploymentID               string                       `json:"deployment_id"`
+	Mode                       string                       `json:"mode"`
+	PackageAllowlist           []string                     `json:"package_allowlist,omitempty"`
+	PackageDenylist            []string                     `json:"package_denylist,omitempty"`
+	PostPatchRescan            bool                         `json:"post_patch_rescan,omitempty"`
 
 	// Proxy mode.
 	ProxyURL string `json:"proxy_url,omitempty"`
 
-	// Airgapped mode — pre-staged repository sources file.
+	// Legacy path is not accepted as offline content authorization.
 	StagedRepoPath string `json:"staged_repo_path,omitempty"`
 }
 
@@ -123,8 +129,22 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		})
 		return
 	}
+	actualRuntime := detectedPatchRuntime()
+	if err := detail.Window.Validate(time.Now().UTC()); err != nil {
+		enqueueCompletedAction(completedAction{Action: jobType, JobID: jobID, Status: "failed", Error: err.Error()})
+		return
+	}
+	if detail.Runtime != nil && *detail.Runtime != actualRuntime {
+		enqueueCompletedAction(completedAction{Action: jobType, JobID: jobID, Status: "failed", Error: "patch runtime changed since approval; create a new reviewed request"})
+		return
+	}
 
 	cmdName, args, env, label, ok := patchCommandForJob(effectiveJobType, detail)
+	offline := effectiveJobType == patchJobAirgapped
+	if offline {
+		ok = actualRuntime.Validate("airgapped") == nil && patchOfflineRoot != ""
+		label = "approved signed local APT plan"
+	}
 	if !ok {
 		log.Warn("no patch command for platform / mode",
 			zap.String("os", runtime.GOOS),
@@ -153,7 +173,21 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		cmd.Env = append(cmd.Environ(), env...)
 	}
 	beforeHealth := collectPatchHealth()
-	output, runErr := cmd.CombinedOutput()
+	if err := detail.Window.Validate(time.Now().UTC()); err != nil {
+		enqueueCompletedAction(completedAction{Action: jobType, JobID: jobID, Status: "failed", Error: err.Error()})
+		return
+	}
+	var output []byte
+	var runErr error
+	if offline {
+		if detail.PublishedOfflinePlanSHA256 != "" {
+			output, runErr = offlineapt.InstallPublished(execCtx, patchOfflineRoot, *detail.OfflineContent, detail.PublishedOfflinePlanSHA256)
+		} else {
+			output, runErr = offlineapt.Install(execCtx, patchOfflineRoot, *detail.OfflineContent)
+		}
+	} else {
+		output, runErr = cmd.CombinedOutput()
+	}
 	logTail := tailString(string(output), 4096)
 
 	if runErr != nil {
@@ -205,40 +239,30 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 //
 //	detail.ProxyURL so apt/dnf route through the managed Squid.
 //
-// Airgapped — apt-get only: -o Dir::Etc::SourceList=<staged> reads from a
-//
-//	pre-staged repo file dropped on the node by the bundle. Other
-//	OSes are not supported in this mode (operators must use proxy).
+// Airgapped remains blocked. File-only refresh/simulation qualification lives
+// in internal/offlineapt; no installation path is exposed yet.
 func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, args []string, env []string, label string, ok bool) {
+	mode, known := map[string]string{patchJobDirect: "direct", patchJobProxy: "proxy", patchJobAirgapped: "airgapped"}[jobType]
+	if !known || detectedPatchRuntime().Validate(mode) != nil {
+		return "", nil, nil, "", false
+	}
+	if detail.OfflineContent.Validate(mode, detail.PackageAllowlist, detail.PackageDenylist) != nil {
+		return "", nil, nil, "", false
+	}
 	switch jobType {
 	case patchJobAirgapped:
-		// Airgapped is Linux/apt only for this iteration. dnf/yum airgapped
-		// flows can be added later by extending this branch.
-		if runtime.GOOS != "linux" {
-			return "", nil, nil, "", false
-		}
-		if _, err := exec.LookPath("apt-get"); err != nil {
-			return "", nil, nil, "", false
-		}
-		staged := detail.StagedRepoPath
-		if strings.TrimSpace(staged) == "" {
-			return "", nil, nil, "", false
-		}
-		if allowlist := normalizePatchPackageList(detail.PackageAllowlist); len(allowlist) > 0 {
-			return "/bin/sh", []string{"-c", fmt.Sprintf(
-				"apt-get -o Dir::Etc::SourceList=%s update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::SourceList=%s -y -qq -o Dpkg::Options::=--force-confold install --only-upgrade %s",
-				staged, staged, shellQuoteArgs(allowlist),
-			)}, nil, "apt-get airgapped allowlist (staged: " + staged + ")", true
-		}
-		return "/bin/sh", []string{"-c", fmt.Sprintf(
-			"apt-get -o Dir::Etc::SourceList=%s update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Dir::Etc::SourceList=%s -y -qq -o Dpkg::Options::=--force-confold upgrade",
-			staged, staged,
-		)}, nil, "apt-get airgapped (staged: " + staged + ")", true
+		// Never retain an unsafe fallback implementation behind the gate.
+		// internal/offlineapt is read-only qualification work; installation
+		// stays unavailable until the complete signed local path qualifies.
+		return "", nil, nil, "", false
 
 	case patchJobProxy:
 		// Proxy mode: pass HTTP_PROXY/HTTPS_PROXY env to the package manager.
-		// Falls back to direct if no proxy URL (server side should reject this).
+		// Missing or malformed proxy identity is rejected.
 		if detail.ProxyURL == "" {
+			return "", nil, nil, "", false
+		}
+		if patchsupport.ProxyURL(detail.ProxyURL) != nil {
 			return "", nil, nil, "", false
 		}
 		envProxy := []string{
@@ -246,26 +270,34 @@ func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, a
 			"https_proxy=" + detail.ProxyURL,
 			"HTTP_PROXY=" + detail.ProxyURL,
 			"HTTPS_PROXY=" + detail.ProxyURL,
+			"no_proxy=",
+			"NO_PROXY=",
 		}
 		// Reuse the direct command tables but with proxy env injected.
 		base, baseArgs, _, baseLabel, baseOK := patchCommandForJob(patchJobDirect, detail)
 		if !baseOK {
 			return "", nil, nil, "", false
 		}
+		if base == "/bin/sh" {
+			options := "apt-get -o Acquire::http::Proxy=" + shellQuoteArgs([]string{detail.ProxyURL}) + " -o Acquire::https::Proxy=" + shellQuoteArgs([]string{detail.ProxyURL})
+			baseArgs[1] = strings.ReplaceAll(baseArgs[1], "apt-get", options)
+		} else if base == "dnf" || base == "yum" {
+			baseArgs = append([]string{"--setopt=proxy=" + detail.ProxyURL}, baseArgs...)
+		}
 		return base, baseArgs, envProxy, baseLabel + " (via proxy " + detail.ProxyURL + ")", true
 
-	default: // patchJobDirect or anything else falls back to direct.
+	default: // patchJobDirect; unknown actions were rejected above.
 		allowlist := normalizePatchPackageList(detail.PackageAllowlist)
 		switch runtime.GOOS {
 		case "linux":
 			if _, err := exec.LookPath("apt-get"); err == nil {
 				if len(allowlist) > 0 {
 					return "/bin/sh", []string{"-c",
-						"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold install --only-upgrade " + shellQuoteArgs(allowlist),
+						"apt-get -o APT::Update::Error-Mode=any update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold install --only-upgrade " + shellQuoteArgs(allowlist),
 					}, nil, "apt-get update + install --only-upgrade allowlist", true
 				}
 				return "/bin/sh", []string{"-c",
-					"apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade",
+					"apt-get -o APT::Update::Error-Mode=any update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq -o Dpkg::Options::=--force-confold upgrade",
 				}, nil, "apt-get update + upgrade", true
 			}
 			if _, err := exec.LookPath("dnf"); err == nil {
@@ -302,6 +334,18 @@ func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, a
 }
 
 func validatePatchPackagePolicy(detail patchActionDetail) error {
+	if detail.Mode == "airgapped" && !detail.PostPatchRescan {
+		return fmt.Errorf("offline patch installation requires fresh inventory after execution")
+	}
+	if err := detail.OfflineContent.ValidateInstallation(detail.Mode, detail.PackageAllowlist, detail.PackageDenylist); err != nil {
+		return err
+	}
+	if detail.Mode == "airgapped" && detail.OfflineContent == nil {
+		return fmt.Errorf("approved offline content identity required")
+	}
+	if err := detail.OfflineContent.Validate(detail.Mode, detail.PackageAllowlist, detail.PackageDenylist); err != nil {
+		return err
+	}
 	allowlist := normalizePatchPackageList(detail.PackageAllowlist)
 	denylist := normalizePatchPackageList(detail.PackageDenylist)
 	for _, allow := range allowlist {

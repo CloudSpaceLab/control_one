@@ -28,7 +28,7 @@ func (s *Server) createPatchNodeActionPlan(ctx context.Context, tenantID, deploy
 }
 
 func patchNodeActionPlanParams(tenantID, deploymentID, patchStateID, nodeID uuid.UUID, mode string, policy patchPackagePolicy) storage.CreateActionPlanParams {
-	return storage.CreateActionPlanParams{
+	params := storage.CreateActionPlanParams{
 		TenantID:   tenantID,
 		NodeID:     &nodeID,
 		Domain:     "patch",
@@ -70,6 +70,13 @@ func patchNodeActionPlanParams(tenantID, deploymentID, patchStateID, nodeID uuid
 			"node_patch_state_id": patchStateID.String(),
 		},
 	}
+	if policy.PublishedOfflinePlanSHA256 != "" {
+		params.Diff["published_offline_plan_sha256"] = policy.PublishedOfflinePlanSHA256
+	}
+	if policy.OfflineContent != nil {
+		params.Diff["offline_content"] = policy.OfflineContent
+	}
+	return params
 }
 
 func (s *Server) markActionPlanFailed(ctx context.Context, rawPlanID string) {

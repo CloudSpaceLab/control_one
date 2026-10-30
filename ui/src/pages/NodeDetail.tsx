@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { currentAgentAddresses } from '@/lib/nodeAddresses';
 import { ArrowLeft, Cpu, Globe2, KeyRound, Network, Package, RefreshCw, Server, ShieldAlert, Trash2 } from 'lucide-react';
 import {
   Alert,
@@ -23,6 +24,7 @@ import { LogDumpPanel } from '@/features/log-dumps/LogDumpPanel';
 import { NodeAssessmentEvidence } from '@/features/patch-management/NodeAssessmentEvidence';
 import { PatchVerificationEvidence } from '@/features/patch-management/PatchVerificationEvidence';
 import { UpdateCandidateEvidence } from '@/features/patch-management/UpdateCandidateEvidence';
+import { NodePatchAssessmentNotice } from '@/features/patch-management/PatchAssessmentViews';
 import {
   Dialog,
   DialogContent,
@@ -481,7 +483,8 @@ function OverviewTab({ node, health, cpu, mem, disk, cpuLatest, memLatest, diskL
           <Vital label="Hostname" value={node.hostname} mono />
           <Vital label="Tenant" value={node.tenant_id} mono />
           <Vital label="OS" value={`${node.os ?? '—'} · ${node.arch ?? '—'}`} />
-          <Vital label="Public IP" value={node.public_ip ?? '—'} mono />
+          <Vital label="Enrollment / configured IP" value={node.public_ip ?? '—'} mono />
+          <Vital label="Agent IPs (current)" value={currentAgentAddresses(node).join(', ') || 'Unavailable — no current observation'} mono />
           <Vital label="Agent version" value={node.agent_version ?? '—'} mono />
           <Vital label="State" value={String(node.state)} />
           <Vital label="First scan" value={formatTs(node.first_scan_at)} />
@@ -1898,10 +1901,13 @@ function RecommendationsTab({ nodeId, tenantId, health }: { nodeId: string; tena
   const api = useApiClient();
   const [recs, setRecs] = useState<import('@/lib/api').Recommendation[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadFailed(false);
+    setRecs([]);
     api
       .listRecommendations(tenantId)
       .then((resp) => {
@@ -1914,7 +1920,7 @@ function RecommendationsTab({ nodeId, tenantId, health }: { nodeId: string; tena
         setRecs(filtered);
       })
       .catch(() => {
-        if (!cancelled) setRecs([]);
+        if (!cancelled) {setRecs([]);setLoadFailed(true);}
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -1937,6 +1943,7 @@ function RecommendationsTab({ nodeId, tenantId, health }: { nodeId: string; tena
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="lg:col-span-2"><NodePatchAssessmentNotice nodeId={nodeId}/></div>
       <Panel padding="md" eyebrow="AI · NODE HEALTH" title="Top contributing signals">
         {breakdown.length === 0 ? (
           <p className="text-sm text-text-muted">No predictive signals yet — keep telemetry flowing.</p>
@@ -1959,8 +1966,9 @@ function RecommendationsTab({ nodeId, tenantId, health }: { nodeId: string; tena
 
       <Panel padding="md" eyebrow="POSTURE" title="Recommendations for this node">
         {loading && <Loader label="Loading…" />}
-        {!loading && recs.length === 0 && (
-          <p className="text-sm text-text-muted">No open recommendations matched this node.</p>
+        {!loading && loadFailed && <Alert variant="warning" title="Recommendations unavailable">Recommendations could not be loaded. An empty list does not establish that this node needs no patching.</Alert>}
+        {!loading && !loadFailed && recs.length === 0 && (
+          <p className="text-sm text-text-muted">No open recommendations matched this node. Assessment coverage and patch verification above must be checked separately.</p>
         )}
         <ul className="flex flex-col gap-2">
           {recs.map((r) => (

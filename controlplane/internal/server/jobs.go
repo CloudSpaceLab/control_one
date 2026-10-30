@@ -1111,6 +1111,7 @@ func agentCanReadJob(principal *auth.Principal, job *storage.Job) bool {
 func agentReadableJobType(jobType string) bool {
 	switch strings.TrimSpace(jobType) {
 	case JobTypeAgentUpdate,
+		"patch.prepare_offline",
 		JobTypeFirewallRuleAdd,
 		JobTypeFirewallRuleDelete,
 		JobTypePatchDeployDirect,
@@ -1119,6 +1120,7 @@ func agentReadableJobType(jobType string) bool {
 		JobTypePatchInventoryScan,
 		JobTypeSquidInstall,
 		JobTypeSquidReconfigure,
+		"squid.remove",
 		JobTypeSquidConfigureClient,
 		JobTypeWebserverInventoryScan,
 		JobTypeWebserverConfigPlan,
@@ -1179,7 +1181,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 	}
 	// A dispatched package-manager command cannot be stopped by marking its
 	// database job cancelled. Doing so also races away its real completion.
-	if job.Type == JobTypePatchDeployDirect || job.Type == JobTypePatchDeployProxy || job.Type == JobTypePatchDeployAirgapped {
+	if job.Type == JobTypePatchDeployDirect || job.Type == JobTypePatchDeployProxy || job.Type == JobTypePatchDeployAirgapped || job.Type == "patch.prepare_offline" {
 		http.Error(w, "dispatched patch execution cannot be cancelled; retain and reconcile its actual outcome", http.StatusConflict)
 		return
 	}

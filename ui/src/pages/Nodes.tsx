@@ -35,6 +35,7 @@ import {
 } from '../lib/agentUpdateJobs';
 import { WORLD_COUNTRY_PATHS, projectGeoCoordinates } from '../lib/worldMap';
 import type { ColumnDef } from '@tanstack/react-table';
+import { currentAgentAddresses } from '@/lib/nodeAddresses';
 
 // ── Factual node geolocation ───────────────────────────────────────────────
 
@@ -50,6 +51,9 @@ interface NodeMapPoint {
 }
 
 function primaryObservedIP(node: NodeSummary): string | null {
+  const current = currentAgentAddresses(node);
+  if (current.length) return current[0];
+  if ((node.network_observations ?? []).some(row => row.source === 'agent_interface_snapshot')) return null;
   const publicObservations = (node.network_observations ?? [])
     .filter((observation) => observation.kind === 'public_ip' && observation.value)
     .sort((a, b) => b.confidence - a.confidence);

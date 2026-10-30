@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/offlinebundle"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
 	"github.com/CloudSpaceLab/control_one/internal/compliance"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // JobTypePatchDeployDirect dispatches an apt/dnf/winget upgrade run on the
@@ -33,8 +35,8 @@ const (
 	// JobTypePatchDeployProxy routes apt/yum through HTTP_PROXY against a
 	// managed Squid. Agent reads proxy host:port from the job payload.
 	JobTypePatchDeployProxy = "patch.deploy_proxy"
-	// JobTypePatchDeployAirgapped reads from a pre-staged repo path on the
-	// node — no upstream traffic. Agent uses apt-get -o Dir::Etc::SourceList.
+	// JobTypePatchDeployAirgapped is reserved. Execution remains blocked until
+	// offline content, installation and recovery acceptance are qualified.
 	JobTypePatchDeployAirgapped = "patch.deploy_airgapped"
 	// JobTypePatchInventoryScan asks the agent to enumerate available
 	// upgrades (apt list --upgradable). Read-only.
@@ -68,14 +70,18 @@ const (
 // uses just the IDs. Proxy mode adds ProxyURL (e.g. "http://10.0.0.5:3128").
 // Airgapped mode adds StagedRepoPath (e.g. "/var/cache/apt/staged").
 type patchJobPayload struct {
-	NodePatchStateID string   `json:"node_patch_state_id"`
-	NodeID           string   `json:"node_id"`
-	DeploymentID     string   `json:"deployment_id"`
-	ActionPlanID     string   `json:"action_plan_id,omitempty"`
-	Mode             string   `json:"mode"`
-	PackageAllowlist []string `json:"package_allowlist,omitempty"`
-	PackageDenylist  []string `json:"package_denylist,omitempty"`
-	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
+	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
+	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
+	Window                     *patchsupport.Window         `json:"patch_window,omitempty"`
+	Runtime                    *patchsupport.Runtime        `json:"patch_runtime,omitempty"`
+	NodePatchStateID           string                       `json:"node_patch_state_id"`
+	NodeID                     string                       `json:"node_id"`
+	DeploymentID               string                       `json:"deployment_id"`
+	ActionPlanID               string                       `json:"action_plan_id,omitempty"`
+	Mode                       string                       `json:"mode"`
+	PackageAllowlist           []string                     `json:"package_allowlist,omitempty"`
+	PackageDenylist            []string                     `json:"package_denylist,omitempty"`
+	PostPatchRescan            bool                         `json:"post_patch_rescan,omitempty"`
 
 	// Proxy mode.
 	ProxyURL string `json:"proxy_url,omitempty"`
@@ -111,11 +117,13 @@ func (s *Server) handlePatchDeployJob(_ context.Context, _ *storage.Job) error {
 // ── HTTP endpoints ────────────────────────────────────────────────────────
 
 type patchDeployRequest struct {
-	TenantID string   `json:"tenant_id"`
-	NodeIDs  []string `json:"node_ids,omitempty"` // empty → every enrolled node in the tenant
-	Mode     string   `json:"mode,omitempty"`     // "direct" today; reserved for future
-	Reason   string   `json:"reason,omitempty"`
-	DryRun   bool     `json:"dry_run,omitempty"`
+	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
+	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
+	TenantID                   string                       `json:"tenant_id"`
+	NodeIDs                    []string                     `json:"node_ids,omitempty"` // empty → every enrolled node in the tenant
+	Mode                       string                       `json:"mode,omitempty"`     // "direct" today; reserved for future
+	Reason                     string                       `json:"reason,omitempty"`
+	DryRun                     bool                         `json:"dry_run,omitempty"`
 
 	CanaryNodeIDs    []string `json:"canary_node_ids,omitempty"`
 	WaveSize         int      `json:"wave_size,omitempty"`
@@ -139,13 +147,15 @@ type patchDeployResponse struct {
 }
 
 type patchPackagePolicy struct {
-	approvalID       uuid.UUID
-	approvalHash     string
-	approverID       uuid.UUID
-	approvedProxyURL string
-	Allowlist        []string `json:"allowlist,omitempty"`
-	Denylist         []string `json:"denylist,omitempty"`
-	PostPatchRescan  bool     `json:"post_patch_rescan,omitempty"`
+	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
+	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
+	approvalID                 uuid.UUID
+	approvalHash               string
+	approverID                 uuid.UUID
+	approvedProxyURL           string
+	Allowlist                  []string `json:"allowlist,omitempty"`
+	Denylist                   []string `json:"denylist,omitempty"`
+	PostPatchRescan            bool     `json:"post_patch_rescan,omitempty"`
 }
 
 type patchDeploymentPlan struct {
@@ -274,17 +284,19 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 		TargetNodeCount: len(nodeIDs),
 		RequestedBy:     by,
 		Summary: map[string]any{
-			"reason":            req.Reason,
-			"node_count":        len(nodeIDs),
-			"requested":         time.Now().UTC().Format(time.RFC3339),
-			"requested_mode":    requestedMode,
-			"planned_node_ids":  patchPlanNodeIDs(plan),
-			"canary_node_ids":   patchPlanCanaryNodeIDs(plan),
-			"wave_size":         plan.WaveSize,
-			"package_allowlist": policy.Allowlist,
-			"package_denylist":  policy.Denylist,
-			"post_patch_rescan": policy.PostPatchRescan,
-			"waves":             plan.Waves,
+			"reason":                        req.Reason,
+			"node_count":                    len(nodeIDs),
+			"requested":                     time.Now().UTC().Format(time.RFC3339),
+			"requested_mode":                requestedMode,
+			"planned_node_ids":              patchPlanNodeIDs(plan),
+			"canary_node_ids":               patchPlanCanaryNodeIDs(plan),
+			"wave_size":                     plan.WaveSize,
+			"package_allowlist":             policy.Allowlist,
+			"package_denylist":              policy.Denylist,
+			"post_patch_rescan":             policy.PostPatchRescan,
+			"offline_content":               policy.OfflineContent,
+			"published_offline_plan_sha256": policy.PublishedOfflinePlanSHA256,
+			"waves":                         plan.Waves,
 		},
 	})
 	if err != nil {
@@ -485,8 +497,8 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 			if posture.Active && posture.Mode == isolationModeAirgapped && mode != patchModeAirgapped {
 				return patchGateResult{Reason: "node is airgapped; use airgapped patch mode or clear the isolation timer"}
 			}
-			if posture.Active && posture.Mode == isolationModeWhitelist && mode == patchModeDirect && windowID == nil && !stringSliceContainsFold(posture.AllowedApplications, "patch") {
-				return patchGateResult{Reason: "node is whitelist-only; patch requires an allowed patch application, proxy, airgapped mode, or a maintenance window"}
+			if posture.Active && posture.Mode == isolationModeWhitelist && mode == patchModeDirect && !stringSliceContainsFold(posture.AllowedApplications, "patch") {
+				return patchGateResult{Reason: "node is whitelist-only; a calendar window does not authorize network access; patch requires an allowed patch application or qualified repository route"}
 			}
 			if val, ok := node.Labels["remediation"]; ok {
 				if str, ok := val.(string); ok && strings.EqualFold(strings.TrimSpace(str), "manual-only") {
@@ -524,12 +536,24 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	// operator approve endpoint then re-runs dispatchPatchModeToNode. When
 	// the tenant has opted out (PatchRequiresApproval=false) we keep the
 	// legacy immediate-dispatch path — the gate is a no-op.
-	if cfg.PatchRequiresApproval {
+	if cfg.PatchRequiresApproval || mode == patchModeAirgapped {
 		deployment, err := s.store.GetPatchDeployment(ctx, deploymentID)
 		if err != nil || deployment == nil || deployment.TenantID != tenantID {
 			return patchGateResult{Reason: "cannot snapshot patch approval policy"}
 		}
-		policyHash, _, err := s.patchApprovalPolicyHash(ctx, tenantID, nodeID, mode, proxyID, windowID, patchPackagePolicyFromSummary(deployment.Summary))
+		policy := patchPackagePolicyFromSummary(deployment.Summary)
+		node, nerr := s.store.GetNode(ctx, nodeID)
+		if nerr != nil {
+			return patchGateResult{Reason: "cannot read patch runtime"}
+		}
+		runtime, rerr := nodePatchRuntime(node, now)
+		if rerr != nil {
+			return patchGateResult{Reason: rerr.Error()}
+		}
+		if err := validateRuntimePackageScope(runtime, policy); err != nil {
+			return patchGateResult{Reason: err.Error()}
+		}
+		policyHash, _, err := s.patchApprovalPolicyHash(ctx, tenantID, nodeID, mode, proxyID, windowID, policy)
 		if err != nil {
 			return patchGateResult{Reason: err.Error()}
 		}
@@ -578,7 +602,7 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	return patchGateResult{Allowed: true}
 }
 
-func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID uuid.UUID, mode string, windowID *uuid.UUID) patchGateResult {
+func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID uuid.UUID, mode string, windowID *uuid.UUID, policies ...patchPackagePolicy) patchGateResult {
 	if s.store == nil {
 		return patchGateResult{Reason: "patch safety store unavailable"}
 	}
@@ -593,10 +617,34 @@ func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID u
 	if err != nil || node == nil || node.TenantID != tenantID {
 		return patchGateResult{Reason: "cannot verify patch target tenant and isolation policy"}
 	}
+	runtime, rerr := nodePatchRuntime(node, now)
+	if rerr != nil {
+		return patchGateResult{Reason: rerr.Error()}
+	}
+	if err := runtime.Validate(mode); err != nil {
+		return patchGateResult{Reason: err.Error()}
+	}
+	for _, policy := range policies {
+		if err := validatePublishedOfflinePlan(node, policy, now); err != nil {
+			return patchGateResult{Reason: err.Error()}
+		}
+		if err := policy.OfflineContent.ValidateInstallation(mode, policy.Allowlist, policy.Denylist); err != nil {
+			return patchGateResult{Reason: err.Error()}
+		}
+		if err := validateRuntimePackageScope(runtime, policy); err != nil {
+			return patchGateResult{Reason: err.Error()}
+		}
+	}
 	if windowID != nil {
+		if !runtime.CalendarWindowStartCheck {
+			return patchGateResult{Reason: "agent calendar-window enforcement unavailable; update the agent before a windowed request"}
+		}
 		window, werr := s.store.GetMaintenanceWindow(ctx, *windowID)
 		if werr != nil || window == nil || window.TenantID != tenantID {
 			return patchGateResult{Reason: "cannot verify maintenance window"}
+		}
+		if len(window.AllowRepos) > 0 {
+			return patchGateResult{Reason: "network-controlled maintenance windows unavailable until target enforcement receipts are qualified"}
 		}
 		member := false
 		for _, id := range window.NodeIDs {
@@ -643,7 +691,7 @@ func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID u
 	if breaker != nil && breaker.AckedAt == nil {
 		return patchGateResult{Reason: fmt.Sprintf("circuit breaker tripped: %s", breaker.TrippedReason)}
 	}
-	if cfg.PatchRequiresApproval {
+	if cfg.PatchRequiresApproval || mode == patchModeAirgapped {
 		return patchGateResult{AwaitingApproval: true, Reason: "approval required"}
 	}
 	return patchGateResult{Allowed: true}
@@ -661,8 +709,23 @@ func stringSliceContainsFold(values []string, target string) bool {
 // Bind approval to execution-affecting data, rather than loading a possibly
 // changed package policy or proxy endpoint after the operator approved it.
 func (s *Server) patchApprovalPolicyHash(ctx context.Context, tenantID, nodeID uuid.UUID, mode string, proxyID, windowID *uuid.UUID, policy patchPackagePolicy) (string, string, error) {
+	if err := policy.OfflineContent.ValidateInstallation(mode, policy.Allowlist, policy.Denylist); err != nil {
+		return "", "", err
+	}
 	proxyURL := ""
 	snapshot := map[string]any{"tenant_id": tenantID, "node_id": nodeID, "mode": mode, "proxy_id": proxyID, "window_id": windowID, "package_policy": policy}
+	node, nerr := s.store.GetNode(ctx, nodeID)
+	if nerr != nil || node == nil || node.TenantID != tenantID {
+		return "", "", errors.New("cannot verify patch runtime identity")
+	}
+	runtime, rerr := nodePatchRuntime(node, time.Now().UTC())
+	if rerr != nil {
+		return "", "", rerr
+	}
+	if err := validatePublishedOfflinePlan(node, policy, time.Now().UTC()); err != nil {
+		return "", "", err
+	}
+	snapshot["patch_runtime"] = runtime
 	if proxyID != nil {
 		proxy, err := s.store.GetSquidProxy(ctx, *proxyID)
 		if err != nil || proxy == nil || proxy.TenantID != tenantID {
@@ -1098,9 +1161,28 @@ func headerModeForPatchMode(mode string) string {
 
 func patchPackagePolicyFromRequest(req patchDeployRequest) (patchPackagePolicy, error) {
 	policy := patchPackagePolicy{
-		Allowlist:       normalizePatchPackageNames(req.PackageAllowlist),
-		Denylist:        normalizePatchPackageNames(req.PackageDenylist),
-		PostPatchRescan: req.PostPatchRescan,
+		OfflineContent:             req.OfflineContent,
+		PublishedOfflinePlanSHA256: req.PublishedOfflinePlanSHA256,
+		Allowlist:                  normalizePatchPackageNames(req.PackageAllowlist),
+		Denylist:                   normalizePatchPackageNames(req.PackageDenylist),
+		PostPatchRescan:            req.PostPatchRescan,
+	}
+	if policy.PublishedOfflinePlanSHA256 != "" && (req.Mode != "airgapped" || policy.OfflineContent == nil || policy.PublishedOfflinePlanSHA256 != policy.OfflineContent.ManifestSHA256) {
+		return policy, errors.New("published offline plan must match explicit airgapped content")
+	}
+	if policy.OfflineContent != nil {
+		if len(req.NodeIDs) != 1 {
+			return policy, errors.New("offline content requires one explicit target node")
+		}
+		if err := policy.OfflineContent.Validate(req.Mode, policy.Allowlist, policy.Denylist); err != nil {
+			return policy, err
+		}
+	}
+	if req.Mode == patchModeAirgapped {
+		if err := policy.OfflineContent.ValidateInstallation(req.Mode, policy.Allowlist, policy.Denylist); err != nil {
+			return policy, err
+		}
+		policy.PostPatchRescan = true
 	}
 	for _, allow := range policy.Allowlist {
 		for _, deny := range policy.Denylist {
@@ -1153,7 +1235,7 @@ func (s *Server) buildPatchDeploymentPlan(ctx context.Context, tenantID uuid.UUI
 		wave := patchDeploymentWave{WaveNumber: waveNumber, Canary: waveNumber == 0 && len(req.CanaryNodeIDs) > 0}
 		for _, nodeID := range ids {
 			mode, _, windowID := s.resolvePatchModeForNode(ctx, nodeID, requestedMode)
-			gate := s.previewPatchSafetyGates(ctx, tenantID, nodeID, mode, windowID)
+			gate := s.previewPatchSafetyGates(ctx, tenantID, nodeID, mode, windowID, policy)
 			status := "allowed"
 			switch {
 			case gate.AwaitingApproval:
@@ -1291,11 +1373,27 @@ func patchPlanWaveNodeUUIDs(plan patchDeploymentPlan, waveNumber int) []uuid.UUI
 }
 
 func patchPackagePolicyFromSummary(summary map[string]any) patchPackagePolicy {
-	return patchPackagePolicy{
-		Allowlist:       stringSliceFromSummary(summary["package_allowlist"]),
-		Denylist:        stringSliceFromSummary(summary["package_denylist"]),
-		PostPatchRescan: boolFromSummary(summary["post_patch_rescan"]),
+	policy := patchPackagePolicy{
+		PublishedOfflinePlanSHA256: stringFromSummary(summary["published_offline_plan_sha256"]),
+		Allowlist:                  stringSliceFromSummary(summary["package_allowlist"]),
+		Denylist:                   stringSliceFromSummary(summary["package_denylist"]),
+		PostPatchRescan:            boolFromSummary(summary["post_patch_rescan"]),
 	}
+	if raw, ok := summary["offline_content"]; ok && raw != nil {
+		policy.OfflineContent = &patchsupport.OfflineContent{}
+		body, err := json.Marshal(raw)
+		if err == nil && string(body) == "null" {
+			policy.OfflineContent = nil
+			return policy
+		}
+		if err == nil {
+			err = json.Unmarshal(body, policy.OfflineContent)
+		}
+		if err != nil {
+			policy.OfflineContent = &patchsupport.OfflineContent{}
+		}
+	}
+	return policy
 }
 
 func patchPlanFromDeployment(deployment *storage.PatchDeployment) patchDeploymentPlan {
@@ -1472,6 +1570,62 @@ func (s *Server) dispatchPatchModeToNode(
 	windowID *uuid.UUID,
 	policy patchPackagePolicy,
 ) (*storage.NodePatchState, error) {
+	if mode == patchModeAirgapped {
+		if err := policy.OfflineContent.ValidateInstallation(mode, policy.Allowlist, policy.Denylist); err != nil {
+			return nil, err
+		}
+		if policy.approvalID == uuid.Nil {
+			return nil, errors.New("offline patch installation always requires explicit approval")
+		}
+		if _, ok := s.store.(interface {
+			DispatchPatchJob(context.Context, storage.DispatchPatchJobParams) (*storage.NodePatchState, error)
+		}); !ok {
+			return nil, errors.New("offline patch installation requires transactional dispatch")
+		}
+	}
+	if err := policy.OfflineContent.Validate(mode, policy.Allowlist, policy.Denylist); err != nil {
+		return nil, err
+	}
+	node, nerr := s.store.GetNode(ctx, nodeID)
+	if nerr != nil || node == nil || node.TenantID != tenantID {
+		return nil, errors.New("cannot verify patch runtime target")
+	}
+	if err := validatePublishedOfflinePlan(node, policy, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	runtime, rerr := nodePatchRuntime(node, time.Now().UTC())
+	if rerr != nil {
+		return nil, rerr
+	}
+	if err := runtime.Validate(mode); err != nil {
+		return nil, err
+	}
+	if err := validateRuntimePackageScope(runtime, policy); err != nil {
+		return nil, err
+	}
+	var windowBounds *patchsupport.Window
+	if windowID != nil {
+		if !runtime.CalendarWindowStartCheck {
+			return nil, errors.New("agent calendar-window enforcement unavailable")
+		}
+		window, err := s.store.GetMaintenanceWindow(ctx, *windowID)
+		if err != nil || window == nil || window.TenantID != tenantID || window.Status != "open" || window.ForceClosedAt != nil || len(window.AllowRepos) > 0 {
+			return nil, errors.New("maintenance window not available for dispatch")
+		}
+		member := false
+		for _, id := range window.NodeIDs {
+			if id == nodeID {
+				member = true
+			}
+		}
+		windowBounds = &patchsupport.Window{ID: window.ID.String(), OpensAt: window.OpensAt, ClosesAt: window.ClosesAt}
+		if err := windowBounds.Validate(time.Now().UTC()); err != nil {
+			return nil, err
+		}
+		if !member {
+			return nil, errors.New("node outside maintenance window")
+		}
+	}
 	state, err := s.store.CreateNodePatchState(ctx, storage.NodePatchState{
 		DeploymentID: deploymentID,
 		NodeID:       nodeID,
@@ -1486,13 +1640,17 @@ func (s *Server) dispatchPatchModeToNode(
 
 	var jobType string
 	payload := patchJobPayload{
-		NodePatchStateID: state.ID.String(),
-		NodeID:           nodeID.String(),
-		DeploymentID:     deploymentID.String(),
-		Mode:             mode,
-		PackageAllowlist: policy.Allowlist,
-		PackageDenylist:  policy.Denylist,
-		PostPatchRescan:  policy.PostPatchRescan,
+		OfflineContent:             policy.OfflineContent,
+		PublishedOfflinePlanSHA256: policy.PublishedOfflinePlanSHA256,
+		Window:                     windowBounds,
+		Runtime:                    &runtime,
+		NodePatchStateID:           state.ID.String(),
+		NodeID:                     nodeID.String(),
+		DeploymentID:               deploymentID.String(),
+		Mode:                       mode,
+		PackageAllowlist:           policy.Allowlist,
+		PackageDenylist:            policy.Denylist,
+		PostPatchRescan:            policy.PostPatchRescan,
 	}
 	switch mode {
 	case patchModeProxy:
@@ -1515,16 +1673,18 @@ func (s *Server) dispatchPatchModeToNode(
 			return state, errors.New("proxy mode selected but no proxy_id configured for node")
 		}
 	case patchModeAirgapped:
+		if err := policy.OfflineContent.ValidateInstallation(mode, policy.Allowlist, policy.Denylist); err != nil {
+			return state, err
+		}
+		if policy.approvalID == uuid.Nil {
+			return state, errors.New("offline patch installation always requires explicit approval")
+		}
 		jobType = JobTypePatchDeployAirgapped
-		// Default staged path the bundle drops files into. Operators can
-		// override per-node via the patch config endpoint.
-		payload.StagedRepoPath = "/var/cache/control-one/staged-repos"
 	case patchModeDirect:
 		jobType = JobTypePatchDeployDirect
 	default:
 		return state, fmt.Errorf("unsupported patch mode %q", mode)
 	}
-	_ = windowID // window association is recorded on the deployment summary; firewall opens happen via JobTypePatchOpenWindow.
 	if atomic, ok := s.store.(interface {
 		DispatchPatchJob(context.Context, storage.DispatchPatchJobParams) (*storage.NodePatchState, error)
 	}); ok {
@@ -1595,8 +1755,10 @@ func decodeSquidPayload(raw json.RawMessage) (any, error) {
 	if _, err := uuid.Parse(p.NodeID); err != nil {
 		return nil, fmt.Errorf("node_id must be UUID: %w", err)
 	}
-	return p, nil
+	return nil, errSquidLifecycleUnqualified
 }
+
+var errSquidLifecycleUnqualified = errors.New("managed proxy lifecycle is unavailable: durable target dispatch, completion and recovery are not qualified; registration does not install or change a proxy")
 
 // handlePatchHeartbeatJob is a shared no-op for the heartbeat-driven patch
 // job types (proxy / airgapped / inventory). The lifecycle runs through
@@ -1605,10 +1767,11 @@ func (s *Server) handlePatchHeartbeatJob(_ context.Context, _ *storage.Job) erro
 	return nil
 }
 
-// handleSquidHeartbeatJob is the shared no-op for squid.install /
+// handleSquidHeartbeatJob refuses legacy lifecycle jobs rather than returning
+// success without execution. Applies to squid.install /
 // squid.reconfigure / squid.configure_client.
 func (s *Server) handleSquidHeartbeatJob(_ context.Context, _ *storage.Job) error {
-	return nil
+	return errSquidLifecycleUnqualified
 }
 
 // handlePatchWindowJob handles patch.open_window / patch.close_window. These
@@ -1636,42 +1799,26 @@ func (s *Server) handlePatchWindowJob(ctx context.Context, job *storage.Job) err
 	if window == nil {
 		return fmt.Errorf("window %s not found", windowID)
 	}
+	if window.TenantID != job.TenantID {
+		return errors.New("window belongs to another tenant")
+	}
+	if len(window.AllowRepos) > 0 {
+		return errors.New("network-controlled maintenance windows unavailable until target enforcement receipts are qualified")
+	}
 	if payload.Action == "open" {
-		// Dispatch firewall.rule_add for each (node, repo) pair so the
-		// allow-repos open while the window is in flight.
-		for _, nodeID := range window.NodeIDs {
-			for _, host := range window.AllowRepos {
-				_, _, ferr := s.dispatchFirewallRule(ctx, window.TenantID, uuid.New(), nodeID, "allow", host, "maintenance window opening", nil)
-				if ferr != nil {
-					s.logger.Warn("dispatch maintenance window allow",
-						zap.String("window_id", windowID.String()),
-						zap.String("node_id", nodeID.String()),
-						zap.String("host", host),
-						zap.Error(ferr),
-					)
-				}
-			}
+		bounds := patchsupport.Window{ID: window.ID.String(), OpensAt: window.OpensAt, ClosesAt: window.ClosesAt}
+		if window.ForceClosedAt != nil {
+			return errors.New("maintenance window was force-closed")
 		}
-		_ = s.store.MarkMaintenanceWindowOpen(ctx, windowID, nil)
-		return nil
+		if err := bounds.Validate(time.Now().UTC()); err != nil {
+			return err
+		}
+		return s.store.MarkMaintenanceWindowOpen(ctx, windowID, nil)
 	}
 	if payload.Action == "close" {
-		for _, nodeID := range window.NodeIDs {
-			for _, host := range window.AllowRepos {
-				_, _, ferr := s.dispatchFirewallRule(ctx, window.TenantID, uuid.New(), nodeID, "block", host, "maintenance window closing", nil)
-				if ferr != nil {
-					s.logger.Warn("dispatch maintenance window block",
-						zap.String("window_id", windowID.String()),
-						zap.String("node_id", nodeID.String()),
-						zap.String("host", host),
-						zap.Error(ferr),
-					)
-				}
-			}
-		}
-		_ = s.store.MarkMaintenanceWindowClosed(ctx, windowID)
-		return nil
+		return s.store.MarkMaintenanceWindowClosed(ctx, windowID)
 	}
+
 	return fmt.Errorf("unknown window action %q", payload.Action)
 }
 
@@ -1776,6 +1923,10 @@ func (s *Server) handleUpsertPatchConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	in := storage.NodePatchConfig{NodeID: nodeID, Mode: mode}
+	if mode == patchModeProxy && (req.ProxyID == nil || strings.TrimSpace(*req.ProxyID) == "") {
+		http.Error(w, "proxy selection required", http.StatusBadRequest)
+		return
+	}
 	if req.ProxyID != nil && strings.TrimSpace(*req.ProxyID) != "" {
 		pid, err := uuid.Parse(strings.TrimSpace(*req.ProxyID))
 		if err != nil {
@@ -2001,7 +2152,11 @@ func (s *Server) handleMaintenanceWindowSubroute(w http.ResponseWriter, r *http.
 			tenantID = window.TenantID
 		}
 		s.recordAudit(r.Context(), principal, tenantID, "patch.window.force_close", "maintenance_window", id.String(), nil)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "closed"})
+		status := "unknown"
+		if window != nil {
+			status = window.Status
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": status, "scope": "scheduling authorization revoked; network closure and running installations are not confirmed"})
 	default:
 		http.NotFound(w, r)
 	}
@@ -2018,6 +2173,14 @@ func (s *Server) dispatchMaintenanceWindowAction(w http.ResponseWriter, r *http.
 		http.Error(w, "window not found", http.StatusNotFound)
 		return
 	}
+	if len(window.AllowRepos) > 0 {
+		http.Error(w, "network-controlled maintenance windows unavailable until target enforcement receipts are qualified", http.StatusConflict)
+		return
+	}
+	if s.worker == nil {
+		http.Error(w, "maintenance window worker unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	jobType := JobTypePatchOpenWindow
 	if action == "close" {
 		jobType = JobTypePatchCloseWindow
@@ -2032,9 +2195,15 @@ func (s *Server) dispatchMaintenanceWindowAction(w http.ResponseWriter, r *http.
 		Status:   storage.JobStatusQueued,
 		Payload:  payload,
 	}
-	if _, err := s.store.CreateJob(r.Context(), job, nil); err != nil {
+	created, err := s.store.CreateJob(r.Context(), job, nil)
+	if err != nil || created == nil {
 		s.logger.Warn("enqueue window job", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if err := s.worker.Enqueue(s.durableJobTask(created, fmt.Sprintf("patch-window-%s", created.ID))); err != nil {
+		_ = s.store.UpdateJobStatus(r.Context(), created.ID, storage.JobStatusFailed, "maintenance window enqueue failed", map[string]any{"finished_at": time.Now()})
+		http.Error(w, "maintenance window enqueue failed", http.StatusServiceUnavailable)
 		return
 	}
 	s.recordAudit(r.Context(), principal, window.TenantID, "patch.window."+action, "maintenance_window", windowID.String(), nil)
@@ -2078,9 +2247,11 @@ func (s *Server) handleListSquidProxies(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, struct {
-		Proxies []storage.SquidProxy `json:"proxies"`
-	}{Proxies: rows})
+	view := make([]proxyListRow, 0, len(rows))
+	for _, p := range rows {
+		view = append(view, proxyListRow{SquidProxy: p, Evidence: s.proxyListEvidence(r.Context(), p)})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"proxies": view})
 }
 
 type squidProxyCreateRequest struct {
@@ -2119,6 +2290,16 @@ func (s *Server) handleCreateSquidProxy(w http.ResponseWriter, r *http.Request) 
 	if req.Port == 0 {
 		req.Port = 3128
 	}
+	if req.Port < 1 || req.Port > 65535 || patchsupport.ProxyURL("http://"+net.JoinHostPort(req.Host, strconv.Itoa(req.Port))) != nil {
+		http.Error(w, "invalid proxy host or port", http.StatusBadRequest)
+		return
+	}
+	if len(req.Whitelist) > 0 {
+		if _, err := patchsupport.SquidConfig(req.Whitelist); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	out, err := s.store.CreateSquidProxy(r.Context(), storage.SquidProxy{
 		TenantID:  tenantID,
 		Host:      req.Host,
@@ -2127,6 +2308,11 @@ func (s *Server) handleCreateSquidProxy(w http.ResponseWriter, r *http.Request) 
 	})
 	if err != nil {
 		s.logger.Warn("create squid proxy", zap.Error(err))
+		var conflict interface{ SQLState() string }
+		if errors.As(err, &conflict) && conflict.SQLState() == "23505" {
+			http.Error(w, "an active proxy is already registered at this address", http.StatusConflict)
+			return
+		}
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -2167,6 +2353,10 @@ func (s *Server) handleSquidProxySubroute(w http.ResponseWriter, r *http.Request
 	if !s.requireTenantAccess(w, r, accessPrincipal, accessProxy.TenantID, roleAdmin) {
 		return
 	}
+	if len(parts) == 2 && parts[1] == "management" {
+		s.handleProxyManagement(w, r, accessPrincipal, accessProxy)
+		return
+	}
 	if len(parts) == 1 {
 		// /api/v1/patch/proxies/:id (DELETE)
 		if r.Method != http.MethodDelete {
@@ -2174,18 +2364,7 @@ func (s *Server) handleSquidProxySubroute(w http.ResponseWriter, r *http.Request
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		principal, ok := s.authorize(w, r, roleAdmin)
-		if !ok {
-			return
-		}
-		proxy, _ := s.store.GetSquidProxy(r.Context(), id)
-		_ = s.store.UpdateSquidProxyStatus(r.Context(), id, "removing", "")
-		var tenantID uuid.UUID
-		if proxy != nil {
-			tenantID = proxy.TenantID
-		}
-		s.recordAudit(r.Context(), principal, tenantID, "patch.squid.remove", "squid_proxy", id.String(), nil)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "removing"})
+		s.requestProxyLifecycle(w, r, accessPrincipal, accessProxy, "squid.remove")
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -2213,6 +2392,10 @@ func (s *Server) handleSquidInstall(w http.ResponseWriter, r *http.Request, prin
 		http.Error(w, "proxy not found", http.StatusNotFound)
 		return
 	}
+	if _, ok := s.store.(proxyManagementStore); ok {
+		s.requestProxyLifecycle(w, r, principal, proxy, "squid.install")
+		return
+	}
 	var body struct {
 		NodeID string `json:"node_id"`
 	}
@@ -2225,27 +2408,25 @@ func (s *Server) handleSquidInstall(w http.ResponseWriter, r *http.Request, prin
 		http.Error(w, "node_id must be a UUID", http.StatusBadRequest)
 		return
 	}
-	payload, _ := json.Marshal(squidJobPayload{
-		ProxyID:   proxyID.String(),
-		NodeID:    nodeID.String(),
-		Whitelist: proxy.Whitelist,
-		ProxyURL:  fmt.Sprintf("http://%s:%d", proxy.Host, proxy.Port),
-	})
-	job := &storage.Job{
-		TenantID: proxy.TenantID,
-		Type:     JobTypeSquidInstall,
-		Status:   storage.JobStatusQueued,
-		Payload:  payload,
-	}
-	if _, err := s.store.CreateJob(r.Context(), job, nil); err != nil {
-		s.logger.Warn("enqueue squid install", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	node, nodeErr := s.store.GetNode(r.Context(), nodeID)
+	if nodeErr != nil {
+		http.Error(w, "node lookup unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	s.recordAudit(r.Context(), principal, proxy.TenantID, "patch.squid.install", "squid_proxy", proxyID.String(), map[string]any{
-		"node_id": nodeID.String(),
-	})
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "queued"})
+	if node == nil || node.TenantID != proxy.TenantID {
+		http.Error(w, "node not found in proxy tenant", http.StatusNotFound)
+		return
+	}
+	if _, err := nodePatchRuntime(node, time.Now().UTC()); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	runtimeEvidence, _ := nodePatchRuntime(node, time.Now().UTC())
+	if runtimeEvidence.OS != "linux" {
+		http.Error(w, "Squid management requires a Linux target", http.StatusConflict)
+		return
+	}
+	http.Error(w, errSquidLifecycleUnqualified.Error(), http.StatusNotImplemented)
 }
 
 type squidReconfigureRequest struct {
@@ -2257,6 +2438,10 @@ func (s *Server) handleSquidReconfigure(w http.ResponseWriter, r *http.Request, 
 	proxy, err := s.store.GetSquidProxy(r.Context(), proxyID)
 	if err != nil || proxy == nil {
 		http.Error(w, "proxy not found", http.StatusNotFound)
+		return
+	}
+	if _, ok := s.store.(proxyManagementStore); ok {
+		s.requestProxyLifecycle(w, r, principal, proxy, "squid.reconfigure")
 		return
 	}
 	var req squidReconfigureRequest
@@ -2274,89 +2459,57 @@ func (s *Server) handleSquidReconfigure(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Pre-apply: validate the proposed config locally with `squid -k parse`.
-	// If squid is not available on the controlplane host, treat the validation
-	// as a soft pass so dev environments aren't blocked. Production deployments
-	// have squid installed on the bastion.
-	if err := validateSquidConfig(req.Whitelist); err != nil {
-		_ = s.store.UpdateSquidProxyStatus(r.Context(), proxyID, "degraded", err.Error())
-		http.Error(w, fmt.Sprintf("squid -k parse rejected config: %v", err), http.StatusBadRequest)
+	node, nodeErr := s.store.GetNode(r.Context(), nodeID)
+	if nodeErr != nil {
+		http.Error(w, "node lookup unavailable", http.StatusServiceUnavailable)
 		return
 	}
-
-	// Persist + dispatch. We dispatch to a single node first (the requester
-	// supplied node_id) so the operator can canary before fanning out.
-	if err := s.store.UpdateSquidProxyWhitelist(r.Context(), proxyID, req.Whitelist); err != nil {
-		s.logger.Warn("update squid whitelist", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	if node == nil || node.TenantID != proxy.TenantID {
+		http.Error(w, "node not found in proxy tenant", http.StatusNotFound)
 		return
 	}
-	payload, _ := json.Marshal(squidJobPayload{
-		ProxyID:   proxyID.String(),
-		NodeID:    nodeID.String(),
-		Whitelist: req.Whitelist,
-	})
-	job := &storage.Job{
-		TenantID: proxy.TenantID,
-		Type:     JobTypeSquidReconfigure,
-		Status:   storage.JobStatusQueued,
-		Payload:  payload,
-	}
-	if _, err := s.store.CreateJob(r.Context(), job, nil); err != nil {
-		s.logger.Warn("enqueue squid reconfigure", zap.Error(err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+	if _, err := nodePatchRuntime(node, time.Now().UTC()); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	s.recordAudit(r.Context(), principal, proxy.TenantID, "patch.squid.reconfigure", "squid_proxy", proxyID.String(), map[string]any{
-		"node_id":    nodeID.String(),
-		"whitelist":  req.Whitelist,
-		"dry_run_to": nodeID.String(),
-	})
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":   "queued",
-		"validate": "passed",
-	})
+	runtimeEvidence, _ := nodePatchRuntime(node, time.Now().UTC())
+	if runtimeEvidence.OS != "linux" {
+		http.Error(w, "Squid management requires a Linux target", http.StatusConflict)
+		return
+	}
+	http.Error(w, errSquidLifecycleUnqualified.Error(), http.StatusNotImplemented)
 }
 
-// validateSquidConfig runs `squid -k parse` against a freshly written
-// allowlist file. Returns nil on validation success, an error otherwise.
-// When the squid binary is not present on the controlplane host the function
-// returns nil (soft-pass) so that dev environments without squid still
-// allow the operator to push reconfigure jobs.
+// validateSquidConfig always validates content. If this server has no Squid,
+// target parsing is still mandatory and the response must not claim it passed.
 func validateSquidConfig(whitelist []string) error {
+	body, err := patchsupport.SquidConfig(whitelist)
+	if err != nil {
+		return err
+	}
 	squidBin, err := exec.LookPath("squid")
 	if err != nil {
-		// No squid on the controlplane — soft-pass.
 		return nil
 	}
 	tmp, err := os.CreateTemp("", "squid-*.conf")
 	if err != nil {
-		return fmt.Errorf("temp file: %w", err)
+		return err
 	}
-	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
-	body := "http_port 3128\n"
-	for _, host := range whitelist {
-		// Only allow URL-safe-looking hostnames + dots/colons; reject the
-		// rest as a defence against injection through the config file.
-		if !isSafeSquidHost(host) {
-			return fmt.Errorf("invalid hostname %q in whitelist", host)
-		}
-		body += fmt.Sprintf("acl allowed_hosts dstdomain %s\n", host)
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(body)
+	closeErr := tmp.Close()
+	if err != nil {
+		return err
 	}
-	body += "http_access allow allowed_hosts\n"
-	body += "http_access deny all\n"
-	if _, err := tmp.WriteString(body); err != nil {
-		return fmt.Errorf("write temp: %w", err)
+	if closeErr != nil {
+		return closeErr
 	}
-	cmd := exec.Command(squidBin, "-k", "parse", "-f", tmp.Name())
-	output, runErr := cmd.CombinedOutput()
-	if runErr != nil {
-		return fmt.Errorf("squid -k parse: %s (%v)", strings.TrimSpace(string(output)), runErr)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, squidBin, "-k", "parse", "-f", tmp.Name()).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("squid parse failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
-	_ = filepath.Base(tmp.Name())
 	return nil
 }
 

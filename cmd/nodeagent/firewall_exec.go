@@ -30,7 +30,7 @@ var (
 const completedActionQueueCap = 256
 
 func enqueueCompletedAction(a completedAction) {
-	if isPatchDeploymentAction(a.Action) && agentPatchJournal != nil {
+	if isDurablePatchAction(a.Action) && agentPatchJournal != nil {
 		if err := agentPatchJournal.complete(a); err != nil {
 			// Never fall back to the volatile, overflow-dropping queue.
 			// The durable reservation prevents automatic re-execution after restart.

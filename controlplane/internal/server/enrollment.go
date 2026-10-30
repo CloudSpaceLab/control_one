@@ -642,7 +642,7 @@ func enrollmentNodeLabels(existing map[string]any, token *storage.EnrollmentToke
 	if token != nil {
 		for key, value := range token.Labels {
 			key = strings.TrimSpace(key)
-			if key != "" {
+			if key != "" && !strings.HasPrefix(key, "patch.") {
 				labels[key] = strings.TrimSpace(value)
 			}
 		}

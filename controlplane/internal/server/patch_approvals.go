@@ -13,6 +13,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // Patch-domain webhook event names. Reusing the EventRemediationApproval*
@@ -26,22 +27,24 @@ const (
 
 // patchApprovalResponse is the wire shape for a single patch_approvals row.
 type patchApprovalResponse struct {
-	PackageScopeAvailable bool     `json:"package_scope_available"`
-	PackageAllowlist      []string `json:"package_allowlist,omitempty"`
-	PackageDenylist       []string `json:"package_denylist,omitempty"`
-	ID                    string   `json:"id"`
-	TenantID              string   `json:"tenant_id"`
-	DeploymentID          string   `json:"deployment_id"`
-	NodeID                string   `json:"node_id"`
-	Mode                  string   `json:"mode"`
-	ProxyID               *string  `json:"proxy_id,omitempty"`
-	WindowID              *string  `json:"window_id,omitempty"`
-	Status                string   `json:"status"`
-	ApprovedBy            *string  `json:"approved_by,omitempty"`
-	ApprovedAt            *string  `json:"approved_at,omitempty"`
-	CreatedAt             string   `json:"created_at"`
-	ExpiresAt             string   `json:"expires_at"`
-	JobID                 *string  `json:"job_id,omitempty"` // populated on approve
+	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
+	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
+	PackageScopeAvailable      bool                         `json:"package_scope_available"`
+	PackageAllowlist           []string                     `json:"package_allowlist,omitempty"`
+	PackageDenylist            []string                     `json:"package_denylist,omitempty"`
+	ID                         string                       `json:"id"`
+	TenantID                   string                       `json:"tenant_id"`
+	DeploymentID               string                       `json:"deployment_id"`
+	NodeID                     string                       `json:"node_id"`
+	Mode                       string                       `json:"mode"`
+	ProxyID                    *string                      `json:"proxy_id,omitempty"`
+	WindowID                   *string                      `json:"window_id,omitempty"`
+	Status                     string                       `json:"status"`
+	ApprovedBy                 *string                      `json:"approved_by,omitempty"`
+	ApprovedAt                 *string                      `json:"approved_at,omitempty"`
+	CreatedAt                  string                       `json:"created_at"`
+	ExpiresAt                  string                       `json:"expires_at"`
+	JobID                      *string                      `json:"job_id,omitempty"` // populated on approve
 }
 
 // handlePatchApprovalsCollection routes /api/v1/patch/approvals.
@@ -452,6 +455,12 @@ func (s *Server) patchApprovalResponseWithScope(ctx context.Context, a *storage.
 	}
 	policy := patchPackagePolicyFromSummary(deployment.Summary)
 	resp.PackageScopeAvailable = true
+	if err := policy.OfflineContent.Validate(a.Mode, policy.Allowlist, policy.Denylist); err != nil {
+		resp.PackageScopeAvailable = false
+		return resp
+	}
+	resp.OfflineContent = policy.OfflineContent
+	resp.PublishedOfflinePlanSHA256 = policy.PublishedOfflinePlanSHA256
 	resp.PackageAllowlist = policy.Allowlist
 	resp.PackageDenylist = policy.Denylist
 	return resp

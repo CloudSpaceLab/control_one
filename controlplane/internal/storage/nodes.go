@@ -259,7 +259,11 @@ func (s *Store) UpdateNodeLabels(ctx context.Context, id uuid.UUID, labels map[s
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE nodes
-		SET labels = $2, updated_at = $3
+		SET labels = $2::jsonb
+		 || CASE WHEN labels ? 'patch.offline_repository' THEN jsonb_build_object('patch.offline_repository',labels->'patch.offline_repository') ELSE '{}'::jsonb END
+		 || CASE WHEN labels ? 'patch.offline_preparation' THEN jsonb_build_object('patch.offline_preparation',labels->'patch.offline_preparation') ELSE '{}'::jsonb END
+ || CASE WHEN labels ? 'patch.offline_prepared_plan' THEN jsonb_build_object('patch.offline_prepared_plan',labels->'patch.offline_prepared_plan') ELSE '{}'::jsonb END,
+		 updated_at = $3
 		WHERE id = $1
 	`, id, payload, s.clock())
 	if err != nil {

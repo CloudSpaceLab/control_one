@@ -16,8 +16,10 @@ const mocks = vi.hoisted(() => {
   const denyPatchApproval = vi.fn();
   const listNodes = vi.fn();
   const createPatchDeployment = vi.fn();
+  const listPatchDeploymentNodes = vi.fn();
   const toastSuccess = vi.fn();
   const toastError = vi.fn();
+  const toastWarning = vi.fn();
 
   return {
     getPatchSummary,
@@ -31,14 +33,17 @@ const mocks = vi.hoisted(() => {
     denyPatchApproval,
     listNodes,
     createPatchDeployment,
+    listPatchDeploymentNodes,
     toastSuccess,
     toastError,
+    toastWarning,
     currentTenantId: 'tenant-1' as string | null,
     tenantList: [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }],
     setCurrentTenantId: vi.fn(),
     apiClient: {
       listNodes: (params: unknown) => listNodes(params),
       createPatchDeployment: (payload: unknown) => createPatchDeployment(payload),
+      listPatchDeploymentNodes: (id: string) => listPatchDeploymentNodes(id),
       getPatchSummary: (tenantId?: string) => getPatchSummary(tenantId),
       listPatchDeployments: (params: unknown) => listPatchDeployments(params),
       listSquidProxies: (tenantId: string) => listSquidProxies(tenantId),
@@ -74,6 +79,7 @@ vi.mock('sonner', () => ({
   toast: {
     success: mocks.toastSuccess,
     error: mocks.toastError,
+    warning: mocks.toastWarning,
   },
 }));
 
@@ -124,6 +130,71 @@ const sampleApproval: PatchApproval = {
 };
 
 describe('PatchManagement', () => {
+  it('distinguishes proxy registration from installation and connectivity qualification',async()=>{
+    const user=userEvent.setup();
+    render(<PatchManagement/>);
+    await user.click(await screen.findByRole('button',{name:/Proxies \(/}));
+    expect(screen.getByText('Managed proxy requirements')).toBeInTheDocument();
+    await user.click(screen.getByRole('button',{name:'Register proxy'}));
+    expect(screen.getByRole('heading',{name:'Register patch proxy'})).toBeInTheDocument();
+    expect(screen.getByText(/does not install or reconfigure Squid/)).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'Install proxy'})).not.toBeInTheDocument();
+  });
+  it('retains approved offline versions and refreshes a pending result without certifying remediation', async () => {
+    const user = userEvent.setup();
+    const plan = { format: 2, manifest_sha256: 'a'.repeat(64), installed_status_sha256: 'b'.repeat(64), keyring_sha256: 'c'.repeat(64), suite: 'noble-updates', component: 'main', architecture: 'amd64', requested: [{ name: 'libudev1', version: '255.4-1ubuntu8.18' }], resolved: [{ name: 'libsystemd0', version: '255.4-1ubuntu8.18' }, { name: 'libudev1', version: '255.4-1ubuntu8.18' }] };
+    mocks.listPatchDeployments.mockResolvedValue({ deployments: [{ ...sampleDeployment, Mode: 'airgapped', Status: 'completed', Summary: { package_allowlist: ['libudev1'], offline_content: plan } }] });
+    mocks.listPatchDeploymentNodes.mockResolvedValueOnce({ rows: [{ ID: 'state', NodeID: 'lab-node', Status: 'pending' }] }).mockResolvedValueOnce({ rows: [{ ID: 'state', NodeID: 'lab-node', Status: 'applied', PackagesUpgraded: 2, Verification: { current_state: 'verification_unknown', promotion_eligible: false } }] });
+    render(<PatchManagement />);
+    await user.click(await screen.findByRole('button', { name: 'Per-node' }));
+    expect(await screen.findByText('pending', { exact: true })).toBeInTheDocument();
+    await user.click(screen.getByText('Approved offline content plan', { exact: true }));
+    expect(screen.getByText('libsystemd0 = 255.4-1ubuntu8.18')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Refresh result' }));
+    expect(await screen.findByText('applied', { exact: true })).toBeInTheDocument();
+    expect(screen.getByText('Verification: verification unknown')).toBeInTheDocument();
+    expect(screen.getByText('Promotion: blocked')).toBeInTheDocument();
+    expect(mocks.listPatchDeploymentNodes).toHaveBeenCalledTimes(2);
+  });
+  it('selects an agent-published plan without uploading a file and binds its one target', async () => {
+    const user = userEvent.setup();
+    const plan = { format: 2, manifest_sha256: 'a'.repeat(64), installed_status_sha256: 'b'.repeat(64), keyring_sha256: 'c'.repeat(64), suite: 'noble-updates', component: 'main', architecture: 'amd64', requested: [{ name: 'libudev1', version: '1.2.3' }], resolved: [{ name: 'libudev1', version: '1.2.3' }] };
+    mocks.listNodes.mockResolvedValue({ data: [{ id: 'lab-node', hostname: 'ubuntu-lab', state: 'active', labels: { 'patch.offline_plans': { observed_at: new Date().toISOString(), report: { version: 1, status: 'ready', plans: [plan] } } } }] });
+    mocks.createPatchDeployment.mockResolvedValue({ awaiting_approval: [{ node_id: 'lab-node' }] });
+    render(<PatchManagement />);
+    await user.click(await screen.findByRole('button', { name: 'Deploy patches…' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'airgapped');
+    expect(screen.getByRole('combobox', { name: 'Plan source' })).toHaveValue('agent');
+    expect(screen.queryByLabelText('Offline content-plan file')).not.toBeInTheDocument();
+    await screen.findByRole('option', { name: /ubuntu-lab.*libudev1/ });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Available offline plan' }), 'lab-node');
+    expect(screen.getByRole('checkbox', { name: 'Select node ubuntu-lab' })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Deploy to 1 node' }));
+    await waitFor(() => expect(mocks.createPatchDeployment).toHaveBeenCalledWith(expect.objectContaining({ node_ids: ['lab-node'], published_offline_plan_sha256: plan.manifest_sha256, offline_content: plan, post_patch_rescan: true })));
+  });
+
+  it('imports and submits the exact offline plan for one node with mandatory inventory refresh', async () => {
+    const user = userEvent.setup();
+    const plan = { format: 2, manifest_sha256: 'a'.repeat(64), installed_status_sha256: 'b'.repeat(64), keyring_sha256: 'c'.repeat(64), suite: 'noble-updates', component: 'main', architecture: 'amd64', requested: [{ name: 'liblzma5', version: '1.2.3' }], resolved: [{ name: 'liblzma5', version: '1.2.3' }] };
+    mocks.listNodes.mockResolvedValue({ data: [{ id: 'lab-node', hostname: 'ubuntu-lab', state: 'active', os: 'ubuntu' }] });
+    mocks.createPatchDeployment.mockResolvedValue({ node_count: 0, awaiting_approval: [{ node_id: 'lab-node' }] });
+    render(<PatchManagement />);
+    await user.click(await screen.findByRole('button', { name: 'Deploy patches…' }));
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Mode' }), 'airgapped');
+    await user.click(await screen.findByRole('checkbox', { name: 'Select node ubuntu-lab' }));
+    await user.click(screen.getByRole('button', { name: 'Deploy to 1 node' }));
+    expect(mocks.createPatchDeployment).not.toHaveBeenCalled();
+    expect(await screen.findByText('Load an offline content plan and select exactly one target node.')).toBeVisible();
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Plan source' }), 'manual');
+    const file = new File([JSON.stringify(plan)], 'offline-plan.json', { type: 'application/json' });
+    Object.defineProperty(file, 'text', { value: async () => JSON.stringify(plan) });
+    await user.upload(screen.getByLabelText('Offline content-plan file'), file);
+    expect(await screen.findByText('Exact offline installation plan')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /Package allowlist/ })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Refresh package inventory after patching' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Deploy to 1 node' }));
+    await waitFor(() => expect(mocks.createPatchDeployment).toHaveBeenCalledWith(expect.objectContaining({ mode: 'airgapped', node_ids: ['lab-node'], offline_content: plan, package_allowlist: ['liblzma5'], post_patch_rescan: true })));
+  });
   it('shows the planned proxy mode for historical auto deployments instead of the legacy direct header', async () => {
     mocks.listPatchDeployments.mockResolvedValue({ deployments: [{ ...sampleDeployment, Mode: 'direct', Summary: { requested_mode: 'auto', waves: [{ nodes: [{ mode: 'proxy' }] }] } }] });
     render(<PatchManagement />);
@@ -147,6 +218,17 @@ describe('PatchManagement', () => {
     await waitFor(() => expect(mocks.createPatchDeployment).toHaveBeenCalledWith(expect.objectContaining({
       tenant_id: 'tenant-1', node_ids: ['lab-node'], package_allowlist: ['perl-base'], post_patch_rescan: true,
     })));
+  });
+  it('shows blocked runtime reasons as a warning without claiming dispatch success', async () => {
+    const user = userEvent.setup();
+    mocks.listNodes.mockResolvedValue({ data: [{ id: 'lab-node', hostname: 'ubuntu-lab', state: 'active', os: 'ubuntu' }] });
+    mocks.createPatchDeployment.mockResolvedValue({ node_count: 0, gate_blocked: [{ node_id: 'lab-node', reason: 'offline repository isolation is not qualified' }] });
+    render(<PatchManagement />);
+    await user.click(await screen.findByRole('button', { name: 'Deploy patches…' }));
+    await user.click(await screen.findByRole('checkbox', { name: 'Select node ubuntu-lab' }));
+    await user.click(screen.getByRole('button', { name: 'Deploy to 1 node' }));
+    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalledWith(expect.stringContaining('offline repository isolation is not qualified')));
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
   beforeEach(() => {
     vi.clearAllMocks();
@@ -334,27 +416,26 @@ describe('PatchManagement', () => {
     expect(screen.getAllByText('N/A')).toHaveLength(4);
   });
 
-  it('requires modal confirmation before removing a proxy and keeps failed removal visible', async () => {
-    const user = userEvent.setup();
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    mocks.listSquidProxies.mockResolvedValue({ proxies: [sampleProxy] });
-    mocks.removeSquidProxy.mockRejectedValueOnce(new Error('remove denied'));
-
+  it('shows evidence-based proxy states instead of treating saved installing as live activity', async () => {
+    const user=userEvent.setup();
+    mocks.listSquidProxies.mockResolvedValue({proxies:[{...sampleProxy,Status:'installing',Evidence:{state:'legacy_unverified',message:'Legacy status has no active job.'}},{...sampleProxy,ID:'registered-2',Host:'registered.local',Status:'registered',Evidence:{state:'registered',message:'No installation requested.'}}]});
     render(<PatchManagement />);
+    await user.click(await screen.findByRole('button',{name:/Proxies \(2\)/}));
+    expect(screen.getByText('Legacy / unverified')).toBeInTheDocument();
+    expect(screen.getByText('Registered / unverified')).toBeInTheDocument();
+    expect(screen.getByText('Legacy status has no active job.')).toBeInTheDocument();
+    expect(screen.queryByText('INSTALLING')).not.toBeInTheDocument();
+  });
 
+  it('routes proxy changes through the reviewed management workflow', async () => {
+    const user = userEvent.setup();
+    mocks.listSquidProxies.mockResolvedValue({ proxies: [sampleProxy] });
+    render(<PatchManagement />);
     await user.click(await screen.findByRole('button', { name: /Proxies \(1\)/ }));
-    await user.click(screen.getByRole('button', { name: 'Remove patch proxy patch-proxy.local:3128' }));
-
-    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(/Recorded status is not a live connectivity check/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Manage patch proxy patch-proxy.local:3128' }));
+    expect(screen.getByRole('dialog', {name: 'Manage proxy patch-proxy.local'})).toBeInTheDocument();
     expect(mocks.removeSquidProxy).not.toHaveBeenCalled();
-
-    const dialog = screen.getByRole('dialog', { name: /remove patch proxy patch-proxy.local:3128/i });
-    await user.click(within(dialog).getByRole('button', { name: 'Remove proxy' }));
-
-    await waitFor(() => expect(mocks.removeSquidProxy).toHaveBeenCalledWith('proxy-1'));
-    expect(screen.getByRole('dialog', { name: /remove patch proxy patch-proxy.local:3128/i })).toBeInTheDocument();
-    expect(screen.getByText('Proxy removal failed')).toBeInTheDocument();
-    expect(screen.getAllByText('Failed to remove proxy patch-proxy.local:3128: remove denied').length).toBeGreaterThanOrEqual(2);
   });
 
   it('requires modal confirmation before force-closing a maintenance window and keeps failed force-close visible', async () => {
@@ -366,6 +447,7 @@ describe('PatchManagement', () => {
     render(<PatchManagement />);
 
     await user.click(await screen.findByRole('button', { name: /Windows \(1\)/ }));
+    expect(screen.getByText(/Calendar windows control when a new installation may start/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Force-close maintenance window Emergency patch window' }));
 
     expect(confirmSpy).not.toHaveBeenCalled();

@@ -59,6 +59,12 @@ func main() {
 	// `controlone-agent uninstall` and `controlone-agent verify-binary ...`.
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "offline-stage":
+			if err := runOfflineStage(os.Args[2:], os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "offline-stage failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "uninstall":
 			if err := runUninstall(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "uninstall failed: %v\n", err)
@@ -131,6 +137,7 @@ func main() {
 	if err != nil {
 		log.Fatal("cannot initialize durable patch execution journal", zap.Error(err))
 	}
+	patchOfflineRoot = offlineStagingRoot
 
 	runtimeSettings := agentruntime.Resolve(cfg.AgentRuntime.Profile)
 	log.Info("agent runtime profile selected",

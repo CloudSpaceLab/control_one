@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"os/exec"
-	"runtime"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
+	"github.com/google/uuid"
 )
 
 // Squid job type strings — agent-side mirrors of the controlplane constants
@@ -24,6 +25,7 @@ const (
 	squidJobInstall         = "squid.install"
 	squidJobReconfigure     = "squid.reconfigure"
 	squidJobConfigureClient = "squid.configure_client"
+	squidJobRemove          = "squid.remove"
 )
 
 // squidExecTimeout caps a single squid action.
@@ -31,10 +33,17 @@ const squidExecTimeout = 10 * time.Minute
 
 // squidActionDetail mirrors the server-side squidJobPayload.
 type squidActionDetail struct {
-	ProxyID   string   `json:"proxy_id"`
-	NodeID    string   `json:"node_id"`
-	Whitelist []string `json:"whitelist,omitempty"`
-	ProxyURL  string   `json:"proxy_url,omitempty"`
+	Revision     int64     `json:"revision"`
+	ClientCIDRs  []string  `json:"client_cidrs"`
+	ProbeURLs    []string  `json:"probe_urls"`
+	SquidVersion string    `json:"squid_version"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	RequestedBy  string    `json:"requested_by"`
+	JobType      string    `json:"-"`
+	ProxyID      string    `json:"proxy_id"`
+	NodeID       string    `json:"node_id"`
+	Whitelist    []string  `json:"whitelist,omitempty"`
+	ProxyURL     string    `json:"proxy_url,omitempty"`
 }
 
 // executeSquidAction is the entrypoint for squid.* pending actions
@@ -47,8 +56,32 @@ func executeSquidAction(ctx context.Context, client *api.Client, log *zap.Logger
 		return
 	}
 	jobType, jobID := parts[0], parts[1]
+	if id, err := uuid.Parse(jobID); err != nil || id == uuid.Nil {
+		log.Warn("proxy action refused: valid job UUID required")
+		return
+	}
+	// Legacy configure_client is deliberately excluded: persistent global client
+	// changes are not part of the qualified deployment-scoped proxy contract.
+	if !patchsupport.IsProxyLifecycle(jobType) || agentPatchJournal == nil {
+		log.Warn("proxy action refused: unsupported action or durable journal unavailable")
+		return
+	}
+	reserved, reserveErr := agentPatchJournal.reserve(jobID, jobType)
+	if reserveErr != nil || !reserved {
+		if reserveErr != nil {
+			log.Error("proxy reservation failed", zap.Error(reserveErr))
+		}
+		return
+	}
+	// Share the package/configuration mutation lock with patch installs and
+	// preparation. Fetch and revalidate only after acquiring it.
+	patchExecutionMu.Lock()
+	defer patchExecutionMu.Unlock()
 
 	detail, err := fetchSquidJobDetail(ctx, client, jobID)
+	if err == nil {
+		err = validateSquidDispatchIdentity(jobType, detail, patchAgentNodeID)
+	}
 	if err != nil {
 		log.Warn("fetch squid job detail", zap.Error(err), zap.String("job_id", jobID))
 		enqueueCompletedAction(completedAction{
@@ -62,221 +95,40 @@ func executeSquidAction(ctx context.Context, client *api.Client, log *zap.Logger
 
 	execCtx, cancel := context.WithTimeout(ctx, squidExecTimeout)
 	defer cancel()
-
-	switch jobType {
-	case squidJobInstall:
-		runSquidInstall(execCtx, log, jobType, jobID, detail)
-	case squidJobReconfigure:
-		runSquidReconfigure(execCtx, log, jobType, jobID, detail)
-	case squidJobConfigureClient:
-		runSquidConfigureClient(execCtx, log, jobType, jobID, detail)
-	default:
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  fmt.Sprintf("unknown squid action %q", jobType),
-		})
+	execCtx, deadlineCancel := context.WithDeadline(execCtx, detail.ExpiresAt)
+	defer deadlineCancel()
+	result := completedAction{Action: jobType, JobID: jobID, Status: "failed"}
+	if detail.Revision <= 0 || !managedProxyAvailable() {
+		result.Error = "managed Ubuntu/systemd proxy runtime and reviewed ownership revision required"
+		enqueueCompletedAction(result)
+		return
 	}
+	p := detail.managedRequest()
+	e := managedProxyExecutor{ConfigPath: "/etc/squid/squid.conf", MarkerPath: filepath.Join(filepath.Dir(agentPatchJournal.path), "managed-proxy.json"), Run: managedProxyRun, Ready: proxyUpstreamReady, Stopped: proxyListenerStopped, Version: func(ctx context.Context) (string, error) {
+		out, err := exec.CommandContext(ctx, "dpkg-query", "--show", "--showformat=${Version}", "squid").Output()
+		return strings.TrimSpace(string(out)), err
+	}}
+	proof, executionErr := e.Execute(execCtx, jobType, p)
+	result.Metadata = map[string]any{"proxy_proof": proof, "readiness_scope": "recorded local service and approved HTTPS repository probes; not a continuous health guarantee"}
+	if executionErr != nil {
+		result.Error = tailString(executionErr.Error(), 4096)
+	} else {
+		result.Status = "succeeded"
+	}
+	enqueueCompletedAction(result)
+	return
+
 }
 
-// runSquidInstall installs squid via apt or yum. macOS / Windows are
-// unsupported — operators provision squid on a dedicated bastion, so the
-// agent code path only needs to cover Linux.
-func runSquidInstall(ctx context.Context, log *zap.Logger, jobType, jobID string, _ squidActionDetail) {
-	if runtime.GOOS != "linux" {
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  "squid install only supported on Linux",
-		})
-		return
-	}
-	var (
-		cmdName string
-		args    []string
-		label   string
-	)
-	switch {
-	case lookHas("apt-get"):
-		cmdName = "/bin/sh"
-		args = []string{"-c", "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get -y -qq install squid"}
-		label = "apt-get install squid"
-	case lookHas("dnf"):
-		cmdName = "dnf"
-		args = []string{"-y", "--quiet", "install", "squid"}
-		label = "dnf install squid"
-	case lookHas("yum"):
-		cmdName = "yum"
-		args = []string{"-y", "--quiet", "install", "squid"}
-		label = "yum install squid"
-	default:
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  "no supported package manager for squid install",
-		})
-		return
-	}
-	log.Info("installing squid", zap.String("command", label))
-	cmd := exec.CommandContext(ctx, cmdName, args...) // #nosec G204 — static per package manager.
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  err.Error(),
-			Metadata: map[string]any{
-				"log_tail": tailString(string(output), 4096),
-			},
-		})
-		return
-	}
-	enqueueCompletedAction(completedAction{
-		Action: jobType,
-		JobID:  jobID,
-		Status: "succeeded",
-		Metadata: map[string]any{
-			"log_tail": tailString(string(output), 4096),
-		},
-	})
+func (d squidActionDetail) managedRequest() patchsupport.ProxyLifecycle {
+	return patchsupport.ProxyLifecycle{ProxyID: d.ProxyID, NodeID: d.NodeID, Whitelist: d.Whitelist, ExpiresAt: d.ExpiresAt, RequestedBy: d.RequestedBy, Revision: d.Revision, ClientCIDRs: d.ClientCIDRs, ProbeURLs: d.ProbeURLs, SquidVersion: d.SquidVersion}
 }
 
-// runSquidReconfigure writes the new whitelist to /etc/squid/squid.conf and
-// triggers `squid -k reconfigure`. The controlplane already validated the
-// config via `squid -k parse` before dispatching, so we trust the payload.
-func runSquidReconfigure(ctx context.Context, log *zap.Logger, jobType, jobID string, detail squidActionDetail) {
-	if runtime.GOOS != "linux" {
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  "squid reconfigure only supported on Linux",
-		})
-		return
+func validateSquidDispatchIdentity(action string, detail squidActionDetail, nodeID string) error {
+	if nodeID == "" || detail.NodeID != nodeID || detail.JobType != action {
+		return fmt.Errorf("squid dispatch does not match this node, action, or proxy identity")
 	}
-	body := "http_port 3128\n"
-	for _, h := range detail.Whitelist {
-		// Agent-side defence-in-depth: only emit safe-looking hostnames into
-		// the squid config. Server validated already, but redundant checks
-		// here ensure a corrupted job payload can't inject directives.
-		if !isSafeSquidHostAgent(h) {
-			enqueueCompletedAction(completedAction{
-				Action: jobType,
-				JobID:  jobID,
-				Status: "failed",
-				Error:  fmt.Sprintf("invalid host %q in whitelist", h),
-			})
-			return
-		}
-		body += fmt.Sprintf("acl allowed_hosts dstdomain %s\n", h)
-	}
-	body += "http_access allow allowed_hosts\n"
-	body += "http_access deny all\n"
-	if err := os.WriteFile("/etc/squid/squid.conf", []byte(body), 0o644); err != nil { // #nosec G306 — squid expects 644.
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  fmt.Sprintf("write config: %v", err),
-		})
-		return
-	}
-	log.Info("squid -k reconfigure")
-	cmd := exec.CommandContext(ctx, "squid", "-k", "reconfigure")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  err.Error(),
-			Metadata: map[string]any{
-				"log_tail": tailString(string(output), 4096),
-			},
-		})
-		return
-	}
-	enqueueCompletedAction(completedAction{
-		Action: jobType,
-		JobID:  jobID,
-		Status: "succeeded",
-		Metadata: map[string]any{
-			"log_tail": tailString(string(output), 4096),
-		},
-	})
-}
-
-// runSquidConfigureClient drops apt.conf.d/95proxy on Linux or runs
-// `netsh winhttp set proxy` on Windows so the node's package manager picks
-// up the proxy URL.
-func runSquidConfigureClient(ctx context.Context, log *zap.Logger, jobType, jobID string, detail squidActionDetail) {
-	if detail.ProxyURL == "" {
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  "proxy_url required",
-		})
-		return
-	}
-	switch runtime.GOOS {
-	case "linux":
-		body := fmt.Sprintf("Acquire::http::Proxy \"%s\";\nAcquire::https::Proxy \"%s\";\n",
-			detail.ProxyURL, detail.ProxyURL,
-		)
-		if err := os.WriteFile("/etc/apt/apt.conf.d/95proxy", []byte(body), 0o644); err != nil { // #nosec G306
-			enqueueCompletedAction(completedAction{
-				Action: jobType,
-				JobID:  jobID,
-				Status: "failed",
-				Error:  fmt.Sprintf("write apt proxy: %v", err),
-			})
-			return
-		}
-		log.Info("apt proxy configured", zap.String("proxy_url", detail.ProxyURL))
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "succeeded",
-		})
-	case "windows":
-		// netsh winhttp set proxy <proxy>:port — strip http:// scheme.
-		proxy := strings.TrimPrefix(strings.TrimPrefix(detail.ProxyURL, "http://"), "https://")
-		cmd := exec.CommandContext(ctx, "netsh", "winhttp", "set", "proxy", proxy)
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			enqueueCompletedAction(completedAction{
-				Action: jobType,
-				JobID:  jobID,
-				Status: "failed",
-				Error:  err.Error(),
-				Metadata: map[string]any{
-					"log_tail": tailString(string(output), 2048),
-				},
-			})
-			return
-		}
-		log.Info("netsh winhttp proxy configured", zap.String("proxy", proxy))
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "succeeded",
-			Metadata: map[string]any{
-				"log_tail": tailString(string(output), 2048),
-			},
-		})
-	default:
-		enqueueCompletedAction(completedAction{
-			Action: jobType,
-			JobID:  jobID,
-			Status: "failed",
-			Error:  fmt.Sprintf("client configure not supported on %s", runtime.GOOS),
-		})
-	}
+	return detail.managedRequest().Validate(action, time.Now().UTC())
 }
 
 // fetchSquidJobDetail retrieves the squid payload from the controlplane.
@@ -297,10 +149,16 @@ func fetchSquidJobDetail(ctx context.Context, client *api.Client, jobID string) 
 		return detail, fmt.Errorf("get job %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var envelope struct {
+		ID      string          `json:"id"`
+		Type    string          `json:"type"`
+		Status  string          `json:"status"`
 		Payload json.RawMessage `json:"payload"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 		return detail, fmt.Errorf("decode job: %w", err)
+	}
+	if envelope.ID != jobID || envelope.Status != "running" {
+		return detail, fmt.Errorf("squid job identity or execution status invalid")
 	}
 	if len(envelope.Payload) == 0 {
 		return detail, fmt.Errorf("job has empty payload")
@@ -308,27 +166,11 @@ func fetchSquidJobDetail(ctx context.Context, client *api.Client, jobID string) 
 	if err := json.Unmarshal(envelope.Payload, &detail); err != nil {
 		return detail, fmt.Errorf("decode squid payload: %w", err)
 	}
+	detail.JobType = envelope.Type
 	return detail, nil
 }
 
 func lookHas(bin string) bool {
 	_, err := exec.LookPath(bin)
 	return err == nil
-}
-
-func isSafeSquidHostAgent(h string) bool {
-	if h == "" || len(h) > 253 {
-		return false
-	}
-	for _, r := range h {
-		switch {
-		case r >= 'a' && r <= 'z':
-		case r >= 'A' && r <= 'Z':
-		case r >= '0' && r <= '9':
-		case r == '.' || r == '-' || r == '_' || r == ':':
-		default:
-			return false
-		}
-	}
-	return true
 }

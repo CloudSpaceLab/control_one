@@ -19,6 +19,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 	"github.com/CloudSpaceLab/control_one/internal/contentpacks"
 	"github.com/CloudSpaceLab/control_one/internal/packageinventory"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // enrollmentPendingTimeout controls how long a node may sit in
@@ -45,11 +46,13 @@ const (
 // Everything is optional — the essential signal is that the agent called us,
 // using a client cert whose CN matches the node id.
 type heartbeatRequest struct {
-	AgentVersion    string                    `json:"agent_version"`
-	Capabilities    []string                  `json:"capabilities,omitempty"`
-	AgentReleaseSeq int                       `json:"agent_release_seq,omitempty"`
-	RuntimeProfile  string                    `json:"agent_runtime_profile,omitempty"`
-	CollectorState  []heartbeatCollectorState `json:"collector_state,omitempty"`
+	PublishedOfflinePlans *patchsupport.PublishedPlanReport `json:"published_offline_plans,omitempty"`
+	PatchRuntime          *patchsupport.Runtime             `json:"patch_runtime,omitempty"`
+	AgentVersion          string                            `json:"agent_version"`
+	Capabilities          []string                          `json:"capabilities,omitempty"`
+	AgentReleaseSeq       int                               `json:"agent_release_seq,omitempty"`
+	RuntimeProfile        string                            `json:"agent_runtime_profile,omitempty"`
+	CollectorState        []heartbeatCollectorState         `json:"collector_state,omitempty"`
 
 	AgentSelfMetrics *heartbeatAgentSelfMetrics `json:"agent_self_metrics,omitempty"`
 
@@ -264,6 +267,16 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 			s.logger.Warn("update agent version", zap.Error(verr))
 		}
 	}
+	if updated, rerr := s.updatePatchRuntime(r.Context(), node, body.PatchRuntime); rerr != nil {
+		s.logger.Warn("update patch runtime", zap.Error(rerr))
+	} else {
+		node = updated
+	}
+	if updated, perr := s.updatePublishedOfflinePlans(r.Context(), node, body.PublishedOfflinePlans); perr != nil {
+		s.logger.Warn("update published offline plans", zap.Error(perr))
+	} else {
+		node = updated
+	}
 	if len(body.Capabilities) > 0 {
 		if updated, uerr := s.updateNodeAgentCapabilities(r.Context(), node, body.Capabilities); uerr != nil {
 			s.logger.Warn("update agent capabilities", zap.Error(uerr))
@@ -365,6 +378,8 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 		resp.Reason = &reason
 	}
 	// Check for queued self-update and signal the agent.
+	resp.PendingActions = append(resp.PendingActions, s.offlinePreparationActions(r.Context(), node)...)
+	resp.PendingActions = append(resp.PendingActions, s.proxyLifecycleActions(r.Context(), node)...)
 	if pendingJob, jerr := s.store.GetPendingAgentUpdateJob(r.Context(), nodeID); jerr == nil && pendingJob != nil {
 		// A node-scoped update is an explicit operator request, so it must not
 		// get stranded behind a tenant rollout wave. The agent still validates
@@ -778,9 +793,18 @@ func mergeHeartbeatNetworkObservations(existingRaw any, items []heartbeatNetwork
 	}
 	out := make([]map[string]any, 0, capHint)
 	index := map[string]int{}
+	currentInterfaces := map[string]bool{}
+	for _, item := range items {
+		if item.Source == "agent_interface_snapshot" {
+			currentInterfaces[networkObservationKey(strings.ToLower(strings.TrimSpace(item.Kind)), strings.TrimSpace(item.Value))] = true
+		}
+	}
 	for _, obs := range existing {
 		kind := strings.ToLower(strings.TrimSpace(obs.Kind))
 		value := strings.TrimSpace(obs.Value)
+		if obs.Source == "agent_interface_snapshot" && len(currentInterfaces) > 0 && !currentInterfaces[networkObservationKey(kind, value)] {
+			continue
+		}
 		if kind == "" || value == "" {
 			continue
 		}
@@ -813,7 +837,7 @@ func mergeHeartbeatNetworkObservations(existingRaw any, items []heartbeatNetwork
 			entry := out[idx]
 			firstSeen, _ := entry["first_seen_at"].(string)
 			lastSeen, _ := entry["last_seen_at"].(string)
-			if entry["source"] == source && labelInt(entry, "confidence", 0) == confidence && firstSeen != "" && lastSeen != "" {
+			if source != "agent_interface_snapshot" && entry["source"] == source && labelInt(entry, "confidence", 0) == confidence && firstSeen != "" && lastSeen != "" {
 				continue
 			}
 			if firstSeen == "" {
@@ -891,6 +915,10 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, reporting
 			continue
 		}
 		switch c.Action {
+		case "squid.install", "squid.reconfigure", "squid.remove":
+			s.completeProxyLifecycle(ctx, reportingNodeID, c)
+		case patchsupport.PrepareOfflineJob:
+			s.completeOfflinePreparation(ctx, reportingNodeID, c)
 		case JobTypeAgentUpdate:
 			if c.Status == "succeeded" {
 				fields := map[string]any{}
@@ -1032,7 +1060,7 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, reporting
 					s.logger.Warn("atomic patch completion rejected", zap.Error(err), zap.String("job_id", jobID.String()))
 					continue
 				}
-				rescan := c.Status == "succeeded" // Verification always requires a later snapshot.
+				rescan := c.Status == "succeeded" || c.Action == JobTypePatchDeployAirgapped // Offline failures may have changed packages before interruption.
 				if rescan {
 					requestFullInventory = true
 				}
@@ -1099,6 +1127,30 @@ func agentUpdateAlreadyCurrent(errMsg string) bool {
 func (s *Server) persistedPatchCompletionAcknowledgments(ctx context.Context, nodeID uuid.UUID, completed []heartbeatCompletedAction) []string {
 	var acknowledged []string
 	for _, c := range completed {
+		if patchsupport.IsProxyLifecycle(c.Action) {
+			if s.proxyReceiptPersisted(ctx, nodeID, c) {
+				acknowledged = append(acknowledged, c.JobID)
+			}
+			continue
+		}
+		if c.Action == patchsupport.PrepareOfflineJob {
+			id, err := uuid.Parse(c.JobID)
+			if err != nil {
+				continue
+			}
+			job, err := s.store.GetJob(ctx, id)
+			node, nerr := s.store.GetNode(ctx, nodeID)
+			var receipt struct {
+				Status string `json:"_offline_preparation_receipt"`
+			}
+			if job != nil {
+				_ = json.Unmarshal(job.Payload, &receipt)
+			}
+			if err == nil && nerr == nil && node != nil && job != nil && node.TenantID == job.TenantID && job.Type == c.Action && jobPayloadNodeID(job.Payload) == nodeID && (c.Status == "succeeded" || c.Status == "failed") && receipt.Status == c.Status {
+				acknowledged = append(acknowledged, c.JobID)
+			}
+			continue
+		}
 		if c.Action != JobTypePatchDeployDirect && c.Action != JobTypePatchDeployProxy && c.Action != JobTypePatchDeployAirgapped {
 			continue
 		}

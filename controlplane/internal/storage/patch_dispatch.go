@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 	"github.com/google/uuid"
 	"time"
 )
@@ -38,6 +39,9 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 	if p.Mode != "direct" && p.Mode != "proxy" && p.Mode != "airgapped" {
 		return nil, errors.New("unsupported patch dispatch mode")
 	}
+	if p.Mode == "airgapped" && p.ApprovalID == uuid.Nil {
+		return nil, errors.New("offline execution requires explicit approval")
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -46,6 +50,123 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 	var lockedNode uuid.UUID
 	if err = tx.QueryRowContext(ctx, `SELECT id FROM nodes WHERE id=$1 AND tenant_id=$2 FOR SHARE`, p.NodeID, p.TenantID).Scan(&lockedNode); err != nil {
 		return nil, err
+	}
+	if err = rejectUnreconciledProxyAction(ctx, tx, p.TenantID, p.NodeID); err != nil {
+		return nil, err
+	}
+	var requested struct {
+		PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256"`
+		PostPatchRescan            bool                         `json:"post_patch_rescan"`
+		OfflineContent             *patchsupport.OfflineContent `json:"offline_content"`
+		Allowlist                  []string                     `json:"package_allowlist"`
+		Denylist                   []string                     `json:"package_denylist"`
+		Runtime                    *patchsupport.Runtime        `json:"patch_runtime"`
+		Window                     *patchsupport.Window         `json:"patch_window"`
+	}
+	if err = json.Unmarshal(p.Payload, &requested); err != nil {
+		return nil, err
+	}
+	if err := requested.OfflineContent.Validate(p.Mode, requested.Allowlist, requested.Denylist); err != nil {
+		return nil, err
+	}
+	if p.Mode == "airgapped" {
+		if !requested.PostPatchRescan {
+			return nil, errors.New("offline execution requires post-install inventory")
+		}
+		if requested.Runtime == nil {
+			return nil, errors.New("offline runtime evidence required")
+		}
+		if err := requested.OfflineContent.ValidateInstallation(p.Mode, requested.Allowlist, requested.Denylist); err != nil {
+			return nil, err
+		}
+		var reviewed []byte
+		if err = tx.QueryRowContext(ctx, `SELECT summary->'offline_content' FROM patch_deployments WHERE id=$1 AND tenant_id=$2 FOR SHARE`, p.DeploymentID, p.TenantID).Scan(&reviewed); err != nil {
+			return nil, err
+		}
+		var content any
+		if err = json.Unmarshal(reviewed, &content); err != nil {
+			return nil, err
+		}
+		canonical, _ := json.Marshal(content)
+		raw, _ := json.Marshal(requested.OfflineContent)
+		var normalized any
+		_ = json.Unmarshal(raw, &normalized)
+		raw, _ = json.Marshal(normalized)
+		if !bytes.Equal(canonical, raw) {
+			return nil, errors.New("offline payload differs from reviewed deployment content")
+		}
+		planRaw, err := json.Marshal(p.Plan.Diff["offline_content"])
+		if err != nil {
+			return nil, err
+		}
+		var normalizedPlan any
+		if err = json.Unmarshal(planRaw, &normalizedPlan); err != nil {
+			return nil, err
+		}
+		planRaw, _ = json.Marshal(normalizedPlan)
+		if !bytes.Equal(planRaw, raw) {
+			return nil, errors.New("offline action plan differs from reviewed content")
+		}
+	}
+	if requested.PublishedOfflinePlanSHA256 != "" {
+		if p.Mode != "airgapped" {
+			return nil, errors.New("published offline plan requires airgapped mode")
+		}
+		var raw []byte
+		if err = tx.QueryRowContext(ctx, `SELECT labels->'patch.offline_plans' FROM nodes WHERE id=$1`, p.NodeID).Scan(&raw); err != nil {
+			return nil, err
+		}
+		var evidence patchsupport.PublishedPlanEvidence
+		if json.Unmarshal(raw, &evidence) != nil {
+			return nil, errors.New("published offline plan unavailable at dispatch commit")
+		}
+		if err = evidence.Require(requested.PublishedOfflinePlanSHA256, requested.OfflineContent, time.Now().UTC()); err != nil {
+			return nil, err
+		}
+	}
+	// Source selection is immutable across reviewed deployment, action plan and
+	// dispatch, including attempts to strip an agent selection into manual mode.
+	if p.Mode == "airgapped" {
+		var selected string
+		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(summary->>'published_offline_plan_sha256','') FROM patch_deployments WHERE id=$1 AND tenant_id=$2`, p.DeploymentID, p.TenantID).Scan(&selected); err != nil {
+			return nil, err
+		}
+		planSelected, _ := p.Plan.Diff["published_offline_plan_sha256"].(string)
+		if selected != requested.PublishedOfflinePlanSHA256 || planSelected != selected {
+			return nil, errors.New("offline plan source differs from review")
+		}
+	}
+	if requested.Runtime != nil {
+		var raw []byte
+		if err = tx.QueryRowContext(ctx, `SELECT labels->'patch.runtime' FROM nodes WHERE id=$1`, p.NodeID).Scan(&raw); err != nil {
+			return nil, err
+		}
+		var evidence patchsupport.Evidence
+		if json.Unmarshal(raw, &evidence) != nil || !evidence.Current(time.Now().UTC()) || evidence.Runtime != *requested.Runtime {
+			return nil, errors.New("patch runtime changed or expired before dispatch commit")
+		}
+		if err = evidence.Runtime.Validate(p.Mode); err != nil {
+			return nil, err
+		}
+	}
+	if requested.Window != nil {
+		if requested.Runtime == nil || !requested.Runtime.CalendarWindowStartCheck {
+			return nil, errors.New("agent calendar-window enforcement unavailable at dispatch commit")
+		}
+		if err := requested.Window.Validate(time.Now().UTC()); err != nil {
+			return nil, err
+		}
+		var opens, closes time.Time
+		var status string
+		var forced bool
+		var repositories int
+		err := tx.QueryRowContext(ctx, `SELECT opens_at,closes_at,status,force_closed_at IS NOT NULL,cardinality(allow_repos) FROM maintenance_windows WHERE id=$1 AND tenant_id=$2 AND $3=ANY(node_ids) FOR SHARE`, requested.Window.ID, p.TenantID, p.NodeID).Scan(&opens, &closes, &status, &forced, &repositories)
+		if err != nil {
+			return nil, fmt.Errorf("maintenance window unavailable at dispatch commit: %w", err)
+		}
+		if status != "open" || forced || repositories > 0 || !opens.Equal(requested.Window.OpensAt) || !closes.Equal(requested.Window.ClosesAt) {
+			return nil, errors.New("maintenance window changed or enforcement unavailable before dispatch commit")
+		}
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO node_patch_state(deployment_id,node_id,tenant_id,status)
  SELECT d.id,n.id,d.tenant_id,'pending' FROM patch_deployments d JOIN nodes n ON n.id=$2
@@ -124,8 +245,14 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 	if err != nil {
 		return nil, fmt.Errorf("create patch plan: %w", err)
 	}
-	expected, _ := json.Marshal(p.Plan.Diff)
-	actual, _ := json.Marshal(plan.Diff)
+	expected, err := canonicalPatchDispatchJSON(p.Plan.Diff)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := canonicalPatchDispatchJSON(plan.Diff)
+	if err != nil {
+		return nil, err
+	}
 	if !bytes.Equal(expected, actual) || plan.TenantID != p.TenantID || !plan.NodeID.Valid || plan.NodeID.UUID != p.NodeID || plan.State != ActionPlanStateQueued {
 		return nil, errors.New("existing action plan differs or failed; reconciliation required")
 	}
@@ -160,6 +287,22 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 	}
 	state.JobID = &jobID
 	return state, nil
+}
+
+// Struct fields and persisted JSON objects can have different key order.
+// Compare canonical JSON without changing array order or coercing numbers.
+func canonicalPatchDispatchJSON(value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var decoded any
+	if err = decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	return json.Marshal(decoded)
 }
 
 // AcquirePatchDeploymentDispatch holds a database session lock across the

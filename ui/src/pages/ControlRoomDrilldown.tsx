@@ -18,6 +18,7 @@ import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
 import { describeIPBehaviorFinding } from '../lib/ipBehaviorPresentation';
 import { mapSettledBounded } from '../lib/mapSettledBounded';
+import { TenantPatchAssessmentNotice } from '@/features/patch-management/PatchAssessmentViews';
 import type {
   ControlRoomAction,
   ControlRoomFirewallNode,
@@ -236,6 +237,7 @@ export function ControlRoomDrilldown(): JSX.Element {
         <Skeleton className="h-96 rounded-lg" />
       ) : lane && overview ? (
         <>
+          {lane.id === 'patch-posture' && currentTenantId && <TenantPatchAssessmentNotice tenantId={currentTenantId} refreshKey={overview.generated_at}/>}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
             {[lane.primary_metric, lane.secondary_metric, ...lane.metrics].slice(0, 4).map((metric) => (
               <KpiTile
@@ -251,7 +253,7 @@ export function ControlRoomDrilldown(): JSX.Element {
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
             <Panel className="xl:col-span-2" eyebrow="SUMMARY" title={lane.summary} toneAccent={TONE_ACCENT[lane.tone]}>
               <div className="grid gap-3 md:grid-cols-2">
-                <DetailBlock icon={<ListChecks />} title="Current state" body={`${lane.score}/100 status score. ${lane.summary}.`} tone={lane.tone} />
+                <DetailBlock icon={<ListChecks />} title="Current state" body={lane.id === 'patch-posture' ? `${lane.score}/100 deployment activity score. ${lane.summary}. This score does not establish vulnerability coverage or a verified security fix.` : `${lane.score}/100 status score. ${lane.summary}.`} tone={lane.tone} />
                 <DetailBlock icon={<ClipboardList />} title="Recommended action" body={recommendedAction(lane, overview)} tone={lane.tone} />
               </div>
             </Panel>

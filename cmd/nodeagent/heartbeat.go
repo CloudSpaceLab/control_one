@@ -18,6 +18,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/connectordiscovery"
 	"github.com/CloudSpaceLab/control_one/internal/packageinventory"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // heartbeatPayload is the body we POST to /api/v1/nodes/:id/heartbeat. Only
@@ -25,10 +26,13 @@ import (
 // fields are optional and gated by delta logic to avoid resending unchanged
 // data on every interval.
 type heartbeatPayload struct {
-	AgentVersion    string   `json:"agent_version"`
-	Capabilities    []string `json:"capabilities,omitempty"`
-	AgentReleaseSeq int      `json:"agent_release_seq,omitempty"`
-	RuntimeProfile  string   `json:"agent_runtime_profile,omitempty"`
+	PublishedOfflinePlans *patchsupport.PublishedPlanReport `json:"published_offline_plans,omitempty"`
+	PatchRuntime          *patchsupport.Runtime             `json:"patch_runtime,omitempty"`
+	NetworkObservations   []agentNetworkObservation         `json:"network_observations,omitempty"`
+	AgentVersion          string                            `json:"agent_version"`
+	Capabilities          []string                          `json:"capabilities,omitempty"`
+	AgentReleaseSeq       int                               `json:"agent_release_seq,omitempty"`
+	RuntimeProfile        string                            `json:"agent_runtime_profile,omitempty"`
 
 	CollectorState   []collectorStateReport  `json:"collector_state,omitempty"`
 	CollectorBudget  []collectorBudgetReport `json:"collector_budget,omitempty"`
@@ -183,13 +187,17 @@ func runControlPlaneHeartbeat(ctx context.Context, client *api.Client, log *zap.
 // network blip should not clutter the operator console. The response body is
 // parsed only for informational logging.
 func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nodeID string, applyFilters FilterApplier, applyNetworkPolicy NetworkPolicyApplier, applyApprovedLogSources ApprovedLogSourcesApplier, selfUpdater SelfUpdater) error {
+	patchRuntime := detectedPatchRuntime()
 	payload := heartbeatPayload{
-		AgentVersion:     heartbeatAgentVersion(),
-		Capabilities:     heartbeatAgentCapabilities(),
-		RuntimeProfile:   heartbeatRuntimeProfile(),
-		CollectorState:   heartbeatCollectorState(),
-		CollectorBudget:  heartbeatCollectorBudgets(),
-		AgentSelfMetrics: collectAgentSelfMetrics(),
+		PublishedOfflinePlans: heartbeatPublishedOfflinePlan(ctx),
+		PatchRuntime:          &patchRuntime,
+		NetworkObservations:   heartbeatInterfaceObservations(),
+		AgentVersion:          heartbeatAgentVersion(),
+		Capabilities:          heartbeatAgentCapabilities(),
+		RuntimeProfile:        heartbeatRuntimeProfile(),
+		CollectorState:        heartbeatCollectorState(),
+		CollectorBudget:       heartbeatCollectorBudgets(),
+		AgentSelfMetrics:      collectAgentSelfMetrics(),
 	}
 	if selfUpdater != nil {
 		payload.AgentReleaseSeq = selfUpdater.CurrentReleaseSeq()
@@ -274,6 +282,8 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// heartbeat, so we want the result available before this call
 			// returns. The actual exec lives in firewall_exec.go.
 			executeFirewallAction(ctx, client, log, action)
+		case strings.HasPrefix(action, patchsupport.PrepareOfflineJob+":"):
+			go executeOfflinePreparation(ctx, client, log, action)
 		case strings.HasPrefix(action, "patch.deploy_direct:"),
 			strings.HasPrefix(action, "patch.deploy_proxy:"),
 			strings.HasPrefix(action, "patch.deploy_airgapped:"),
@@ -283,6 +293,7 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			go executePatchAction(ctx, client, log, action)
 		case strings.HasPrefix(action, "squid.install:"),
 			strings.HasPrefix(action, "squid.reconfigure:"),
+			strings.HasPrefix(action, "squid.remove:"),
 			strings.HasPrefix(action, "squid.configure_client:"):
 			// Squid actions are short-lived but still go async to avoid
 			// blocking the heartbeat path on slow apt-get installs.

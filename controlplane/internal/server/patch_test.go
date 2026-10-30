@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
+	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
 // patchTestStore narrows fakeStore so patch tests can reach in-memory rows
@@ -42,6 +44,8 @@ func newPatchTestStore(tenantID, nodeID uuid.UUID) *patchTestStore {
 				ID:        nodeID,
 				TenantID:  tenantID,
 				Hostname:  "patch-host",
+				OS:        sql.NullString{String: "ubuntu 24.04", Valid: true},
+				Labels:    map[string]any{"patch.runtime": patchRuntimeEvidence{Runtime: patchsupport.Runtime{OS: "linux", Manager: "apt"}, ObservedAt: time.Now().UTC()}},
 				State:     storage.NodeStateActive,
 				CreatedAt: time.Now(),
 				UpdatedAt: time.Now(),
@@ -676,20 +680,22 @@ func TestPatchSafetyGatesRespectNodeIsolation(t *testing.T) {
 	}
 	srv := newPatchTestServer(store)
 
-	store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeAirgapped}
+	runtimeEvidence := store.nodes[0].Labels["patch.runtime"]
+	store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeAirgapped, "patch.runtime": runtimeEvidence}
 	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeDirect, nil, nil); gate.Allowed || !strings.Contains(gate.Reason, "airgapped") {
 		t.Fatalf("expected airgapped direct patch to be blocked, got %#v", gate)
 	}
-	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeAirgapped, nil, nil); !gate.Allowed {
-		t.Fatalf("expected airgapped patch mode to be allowed, got %#v", gate)
+	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeAirgapped, nil, nil); gate.Allowed || !strings.Contains(gate.Reason, "offline repository isolation") {
+		t.Fatalf("expected unqualified offline path to remain blocked, got %#v", gate)
 	}
 
-	store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeWhitelist}
+	store.nodes[0].Labels = map[string]any{isolationModeLabel: isolationModeWhitelist, "patch.runtime": runtimeEvidence}
 	if gate := srv.runPatchSafetyGates(context.Background(), tenantID, nodeID, uuid.New(), patchModeDirect, nil, nil); gate.Allowed || !strings.Contains(gate.Reason, "whitelist-only") {
 		t.Fatalf("expected whitelist direct patch without allow app to be blocked, got %#v", gate)
 	}
 
 	store.nodes[0].Labels = map[string]any{
+		"patch.runtime":         runtimeEvidence,
 		isolationModeLabel:      isolationModeWhitelist,
 		isolationAllowAppsLabel: []any{"control-one-agent", "patch"},
 	}

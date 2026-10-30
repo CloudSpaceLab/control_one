@@ -56,7 +56,11 @@ func (s *Store) completePatchEffects(ctx context.Context, tx *sql.Tx, p Complete
 		if err != nil {
 			return err
 		}
-		verification, err := json.Marshal(map[string]any{"node_patch_state": status, "job_status": status, "post_patch_inventory": p.Succeeded && rescan,"security_verification":"verification_pending","promotion_eligible":false})
+		securityState := "verification_pending"
+		if !p.Succeeded {
+			securityState = "execution_failed"
+		}
+		verification, err := json.Marshal(map[string]any{"node_patch_state": status, "job_status": status, "post_patch_inventory": (p.Succeeded || p.Action == "patch.deploy_airgapped") && rescan, "security_verification": securityState, "promotion_eligible": false})
 		if err != nil {
 			return err
 		}

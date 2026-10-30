@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, RefreshCw, ShieldAlert, ShieldCheck, Clock, Server, Plus, Trash2, Check, X, Hourglass } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Loader2, RefreshCw, ShieldAlert, ShieldCheck, Clock, Server, Plus, Check, X, Hourglass } from 'lucide-react';
 import { ConfirmModal } from '@/components/ConfirmModal';
 import { Button } from '../components/ui/button';
 import { Skeleton } from '../components/ui/skeleton';
@@ -9,6 +9,9 @@ import { useTenant } from '../providers/TenantProvider';
 import { AllTenantPatchSummary } from '../features/patch-management/AllTenantPatchSummary';
 import { PatchAssessmentNotice } from '../features/patch-management/PatchAssessmentNotice';
 import { toast } from 'sonner';
+import { agentPublishedOfflinePlan, offlinePlanPreparation, parseOfflinePatchContent } from '../lib/offlinePatchContent';
+import { OfflinePlanPreparation } from '../features/patch-management/OfflinePlanPreparation';
+import {ProxyManagementDialog} from '../features/patch-management/ProxyManagementDialog';
 import type {
   PatchDeployment,
   PatchDeploymentSummary,
@@ -18,7 +21,24 @@ import type {
   SquidProxy,
   NodeSummary,
   PatchApproval,
+  OfflinePatchContent,
 } from '../lib/api';
+
+function OfflineContentReview({ content }: { content: OfflinePatchContent }): JSX.Element {
+  return <section aria-label="Offline content review" className="space-y-2 rounded border border-border p-3 text-xs">
+    <p className="font-semibold">Exact offline installation plan</p>
+    <p>{content.suite} / {content.component} / {content.architecture}</p>
+    <p>Requested: {content.requested.map(pkg => `${pkg.name} = ${pkg.version}`).join(', ')}</p>
+    <p className="font-semibold">Packages to install or reinstall, including dependencies</p>
+    <ul>{content.resolved.map(pkg => <li key={pkg.name} className="font-mono break-all">{pkg.name} = {pkg.version}</li>)}</ul>
+    <details><summary>Content and machine integrity checks</summary>
+      <p className="break-all">Manifest SHA-256: {content.manifest_sha256}</p>
+      <p className="break-all">Installed-state SHA-256: {content.installed_status_sha256}</p>
+      <p className="break-all">Signing-key SHA-256: {content.keyring_sha256}</p>
+    </details>
+    <p>Approval applies to this staged content and machine baseline. A changed plan requires a new request. Reinstalling an existing version does not prove vulnerability remediation.</p>
+  </section>;
+}
 
 // PatchManagement separates measured fleet posture from bounded recent
 // deployment activity, while keeping proxy, maintenance-window and approval
@@ -33,7 +53,6 @@ interface InlineActionState {
   tone?: StateTone;
 }
 
-type PendingProxyRemoval = { proxy: SquidProxy; error?: string };
 type PendingForceClose = { window: MaintenanceWindow; error?: string };
 type PendingApprovalDeny = { approval: PatchApproval; error?: string };
 
@@ -146,7 +165,10 @@ export function PatchManagement(): JSX.Element {
         title="Patch posture"
         description="Package coverage, known patch risk and deployment state."
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <a href="/console/control-room/patch-posture">View management overview</a>
+            </Button>
             <Button variant="outline" size="sm" onClick={refresh} loading={loading}>
 	              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
 	              {loading ? 'Refreshing…' : 'Refresh'}
@@ -474,49 +496,21 @@ function ProxiesPanel({
   onCreate: () => void;
   onChanged: () => void;
 }): JSX.Element {
-  const client = useApiClient();
-  const [actionState, setActionState] = useState<Record<string, InlineActionState>>({});
-  const [pendingRemoval, setPendingRemoval] = useState<PendingProxyRemoval | null>(null);
-  void tenantId;
-
-  const remove = (p: SquidProxy) => {
-    setPendingRemoval({ proxy: p });
-  };
-
-  const confirmRemoval = async () => {
-    if (!pendingRemoval) return;
-    const proxy = pendingRemoval.proxy;
-    const key = proxyActionKey(proxy);
-    setActionState((state) => ({ ...state, [key]: { busy: true } }));
-    try {
-      await client.removeSquidProxy(proxy.ID);
-      setActionState((state) => {
-        const next = { ...state };
-        delete next[key];
-        return next;
-      });
-      setPendingRemoval(null);
-      toast.success('Proxy removal queued');
-      onChanged();
-    } catch (err) {
-      const message = `Failed to remove proxy ${proxy.Host}:${proxy.Port}: ${errorMessage(err, 'remove failed')}`;
-      setActionState((state) => ({ ...state, [key]: { busy: false, message, tone: 'critical' } }));
-      setPendingRemoval((current) =>
-        current?.proxy.ID === proxy.ID ? { ...current, error: message } : current,
-      );
-      toast.error(message);
-    }
-  };
-
-  const pendingBusy = pendingRemoval ? Boolean(actionState[proxyActionKey(pendingRemoval.proxy)]?.busy) : false;
+  const [managedProxy, setManagedProxy] = useState<SquidProxy | null>(null);
+  useEffect(() => setManagedProxy(null), [tenantId]);
 
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
         <Button size="sm" onClick={onCreate}>
-          <Plus className="mr-2 h-4 w-4" /> Install proxy
+          <Plus className="mr-2 h-4 w-4" /> Register proxy
         </Button>
       </div>
+      <p className="text-sm text-text-secondary">
+        Recorded status is not a live connectivity check. Confirm repository access from the target before rollout;
+        a queued configuration change has not yet been applied or verified.
+      </p>
+      <Alert variant="warning" title="Managed proxy requirements">Registration saves connection details. Management requires a bound enrolled host, a current supported agent and reviewed client/repository authorization. Recorded health applies to the last completed verification.</Alert>
       {loadError && proxies.length === 0 ? (
         <EmptyState
           title="Managed proxies unavailable"
@@ -524,8 +518,8 @@ function ProxiesPanel({
         />
       ) : proxies.length === 0 ? (
         <EmptyState
-          title="No managed proxies"
-          description="Install a Squid proxy on a designated bastion to relay package-manager traffic for proxy-mode patch deploys."
+          title="No registered proxies"
+          description="Register an existing approved proxy for proxy-mode patching. Registration does not install software or verify connectivity."
         />
       ) : (
         <div className="overflow-x-auto rounded border border-border">
@@ -536,7 +530,7 @@ function ProxiesPanel({
                 <th className="px-3 py-2">Port</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Whitelist</th>
-                <th className="px-3 py-2">Last validated</th>
+                <th className="px-3 py-2">Last recorded validation</th>
                 <th className="px-3 py-2"></th>
               </tr>
             </thead>
@@ -546,7 +540,9 @@ function ProxiesPanel({
                   <td className="px-3 py-2 font-mono text-xs">{p.Host}</td>
                   <td className="px-3 py-2">{p.Port}</td>
                   <td className="px-3 py-2">
-                    <StatusTag tone={proxyStatusTone(p.Status)}>{p.Status}</StatusTag>
+                    <StatusTag tone={p.Evidence?.state === 'verification_recorded' ? 'info' : 'unknown'}>{proxyEvidenceLabel(p)}</StatusTag>
+                    <p className="mt-1 max-w-xs text-xs text-text-secondary">{p.Evidence?.message ?? 'Lifecycle evidence unavailable; saved status does not establish progress or health.'}</p>
+                    {p.Evidence?.job_id && <p className="mt-1 font-mono text-xs">Job {p.Evidence.job_id.slice(0, 8)}</p>}
                   </td>
                   <td className="px-3 py-2 text-xs text-text-secondary">
                     {p.Whitelist.length === 0 ? '—' : `${p.Whitelist.length} hosts`}
@@ -556,21 +552,8 @@ function ProxiesPanel({
                   </td>
                   <td className="px-3 py-2 text-right">
                     <div className="flex flex-col items-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        loading={actionState[proxyActionKey(p)]?.busy}
-                        onClick={() => remove(p)}
-                        disabled={p.Status === 'removing' || p.Status === 'removed'}
-                        aria-label={`Remove patch proxy ${p.Host}:${p.Port}`}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                      {actionState[proxyActionKey(p)]?.message ? (
-                        <p className={`max-w-[18rem] text-right text-xs ${toneText(actionState[proxyActionKey(p)]?.tone)}`}>
-                          {actionState[proxyActionKey(p)]?.message}
-                        </p>
-                      ) : null}
+                      <Button variant="outline" size="sm" onClick={() => setManagedProxy(p)} aria-label={`Manage patch proxy ${p.Host}:${p.Port}`}>Manage</Button>
+
                     </div>
                   </td>
                 </tr>
@@ -579,24 +562,7 @@ function ProxiesPanel({
           </table>
         </div>
       )}
-      <ConfirmModal
-        open={Boolean(pendingRemoval)}
-        title={pendingRemoval ? `Remove patch proxy ${pendingRemoval.proxy.Host}:${pendingRemoval.proxy.Port}?` : 'Remove patch proxy?'}
-        body="Proxy-mode patch deployments that still reference this proxy will no longer be able to use it. Existing deployment and audit history remain available."
-        confirmLabel="Remove proxy"
-        cancelLabel="Cancel"
-        confirmDisabled={pendingBusy}
-        cancelDisabled={pendingBusy}
-        variant="danger"
-        onConfirm={() => void confirmRemoval()}
-        onCancel={() => setPendingRemoval(null)}
-      >
-        {pendingRemoval?.error ? (
-          <Alert variant="critical" title="Proxy removal failed">
-            {pendingRemoval.error}
-          </Alert>
-        ) : null}
-      </ConfirmModal>
+      {managedProxy && managedProxy.TenantID === tenantId && <ProxyManagementDialog key={`${tenantId}:${managedProxy.ID}`} proxy={managedProxy} tenantId={tenantId} onClose={() => setManagedProxy(null)} onChanged={onChanged} />}
     </div>
   );
 }
@@ -624,7 +590,7 @@ function WindowsPanel({
     setBusy(w.ID);
     try {
       await client.openMaintenanceWindow(w.ID);
-      toast.success('Window open queued — firewall allow rules dispatching');
+      toast.success('Calendar window opening queued');
       onChanged();
     } catch (err) {
       toast.error(`Open failed: ${err instanceof Error ? err.message : 'unknown'}`);
@@ -664,7 +630,7 @@ function WindowsPanel({
         return next;
       });
       setPendingForceClose(null);
-      toast.success('Window force-closed');
+      toast.success('Window scheduling authorization revoked; running installations and network closure are not confirmed');
       onChanged();
     } catch (err) {
       const message = `Failed to force-close window ${window.Name}: ${errorMessage(err, 'force close failed')}`;
@@ -689,6 +655,10 @@ function WindowsPanel({
           <Plus className="mr-2 h-4 w-4" /> Schedule window
         </Button>
       </div>
+      <p className="text-sm text-text-secondary">
+        Calendar windows control when a new installation may start. Network-controlled windows are unavailable until
+        target enforcement is qualified. Closing a window does not confirm firewall closure or stop an installation already running.
+      </p>
       {loadError && windows.length === 0 ? (
         <EmptyState
           title="Maintenance windows unavailable"
@@ -784,7 +754,7 @@ function WindowsPanel({
       <ConfirmModal
         open={Boolean(pendingForceClose)}
         title={pendingForceClose ? `Force-close maintenance window ${pendingForceClose.window.Name}?` : 'Force-close maintenance window?'}
-        body="This stamps the window as force-closed immediately and bypasses normal firewall teardown. Use it only when the normal close path cannot complete."
+        body="This revokes scheduling authorization for new patch requests. It does not confirm network closure or stop an installation already running."
         confirmLabel="Force-close window"
         cancelLabel="Cancel"
         confirmDisabled={pendingBusy}
@@ -830,7 +800,7 @@ function ProxyForm({
         .map((s) => s.trim())
         .filter(Boolean);
       await client.createSquidProxy({ tenant_id: tenantId, host, port, whitelist: list });
-      toast.success('Proxy created');
+      toast.success('Proxy registered; installation and connectivity are not yet verified');
       onCreated();
     } catch (err) {
       toast.error(`Create failed: ${err instanceof Error ? err.message : 'unknown'}`);
@@ -842,12 +812,13 @@ function ProxyForm({
   return (
     <aside className="fixed right-0 top-0 z-40 h-full w-full max-w-lg overflow-y-auto border-l border-border bg-elevated p-6 shadow-2xl">
       <div className="mb-4 flex justify-between">
-        <h3 className="text-lg font-semibold">Install Squid proxy</h3>
+        <h3 className="text-lg font-semibold">Register patch proxy</h3>
         <Button variant="ghost" size="sm" onClick={onClose}>
           Close
         </Button>
       </div>
       <div className="space-y-3">
+        <p className="text-sm text-text-secondary">Register an existing approved proxy. This saves its connection details; it does not install or reconfigure Squid, grant remote-client access, or verify repository connectivity.</p>
         <label className="block text-sm">
           <span className="text-text-secondary">Host (IP or DNS)</span>
           <input
@@ -882,7 +853,7 @@ function ProxyForm({
           </Button>
           <Button size="sm" onClick={submit} disabled={busy}>
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Create proxy
+            Register proxy
           </Button>
         </div>
       </div>
@@ -903,7 +874,7 @@ function WindowForm({
   const [name, setName] = useState('');
   const [opensAt, setOpensAt] = useState('');
   const [closesAt, setClosesAt] = useState('');
-  const [allowRepos, setAllowRepos] = useState('archive.ubuntu.com\nsecurity.ubuntu.com');
+  const [allowRepos, setAllowRepos] = useState('');
   const [nodeIDs, setNodeIDs] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -974,7 +945,7 @@ function WindowForm({
           />
         </label>
         <label className="block text-sm">
-          <span className="text-text-secondary">Allow repos (one host per line)</span>
+          <span className="text-text-secondary">Allow repos (network enforcement unavailable)</span>
           <textarea
             value={allowRepos}
             onChange={(e) => setAllowRepos(e.target.value)}
@@ -982,6 +953,10 @@ function WindowForm({
             className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm font-mono text-xs"
           />
         </label>
+        <p className="text-xs text-text-secondary">
+          Leave repositories empty for a calendar-only window. Windows that change network access are blocked
+          until target enforcement is qualified. This schedule does not open firewall access.
+        </p>
         <label className="block text-sm">
           <span className="text-text-secondary">Node IDs (comma or whitespace separated)</span>
           <textarea
@@ -1032,21 +1007,9 @@ function nodeStatusTone(s: NodePatchState['Status']): 'healthy' | 'warning' | 'c
   }
 }
 
-function proxyStatusTone(s: SquidProxy['Status']): 'healthy' | 'warning' | 'degraded' | 'critical' | 'unknown' {
-  switch (s) {
-    case 'healthy':
-      return 'healthy';
-    case 'installing':
-      return 'warning';
-    case 'degraded':
-      return 'degraded';
-    case 'removing':
-      return 'warning';
-    case 'removed':
-      return 'unknown';
-    default:
-      return 'unknown';
-  }
+function proxyEvidenceLabel(p: SquidProxy): string {
+  const labels: Record<string,string> = {legacy_unverified:'Legacy / unverified',registered:'Registered / unverified',pending:'Awaiting target result',outcome_unknown:'Outcome unknown',failed_or_unknown:'Failed / unknown',removed_verified:'Removal verified',verification_recorded:'Verification recorded',unavailable:'Evidence unavailable',unverified:'Unverified'};
+  return labels[p.Evidence?.state ?? ''] ?? 'Evidence unavailable';
 }
 
 function windowStatusTone(s: MaintenanceWindow['Status']): 'healthy' | 'warning' | 'critical' | 'info' | 'unknown' {
@@ -1098,11 +1061,18 @@ export function DeploymentNodeDetail({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editingNode, setEditingNode] = useState<NodePatchState | null>(null);
+  const [resultRevision, setResultRevision] = useState(0);
+  const approvedOfflinePlan = useMemo(() => {
+    const value = deployment.Summary?.offline_content;
+    if (!value) return null;
+    try { return parseOfflinePatchContent(JSON.stringify(value)); } catch { return null; }
+  }, [deployment.Summary]);
 
   useEffect(() => {
     let cancel = false;
     (async () => {
       setLoading(true);
+      setError(null);
       try {
         const resp = await client.listPatchDeploymentNodes(deployment.ID);
         if (!cancel) setRows(resp.rows ?? []);
@@ -1115,10 +1085,10 @@ export function DeploymentNodeDetail({
     return () => {
       cancel = true;
     };
-  }, [deployment.ID, client]);
+  }, [deployment.ID, client, resultRevision]);
 
   return (
-    <aside className="fixed right-0 top-0 z-40 h-full w-full max-w-2xl overflow-y-auto border-l border-border bg-elevated p-6 shadow-2xl">
+    <aside className="fixed right-0 top-0 z-40 h-full w-full max-w-2xl overflow-y-auto border-l border-border bg-surface p-6 shadow-2xl">
       <div className="mb-4 flex items-start justify-between">
         <div>
           <p className="text-xs uppercase tracking-wider text-text-secondary">Deployment</p>
@@ -1127,9 +1097,11 @@ export function DeploymentNodeDetail({
             {deploymentModeLabel(deployment)} · {new Date(deployment.RequestedAt).toLocaleString()}
           </p>
         </div>
+        <div className="flex gap-2"><Button variant="ghost" size="sm" disabled={loading} onClick={() => setResultRevision(value => value + 1)}>Refresh result</Button>
         <Button variant="ghost" size="sm" onClick={onClose}>
           Close
         </Button>
+        </div>
       </div>
       {loading && <Skeleton className="h-32 w-full" />}
       <section className="mb-4 rounded border border-border p-3" aria-label="Requested package scope">
@@ -1137,6 +1109,7 @@ export function DeploymentNodeDetail({
         <DeploymentPackageScope deployment={deployment} />
         <p className="mt-2 text-xs text-text-secondary">PKGS is the actual number upgraded on each node. It can be 0 when the requested packages are already current.</p>
       </section>
+      {approvedOfflinePlan && <details className="mb-4"><summary className="mb-2 cursor-pointer text-sm">Approved offline content plan</summary><p className="mb-2 text-xs text-text-secondary">Plan source: {deployment.Summary?.published_offline_plan_sha256 ? 'Agent-published plan' : 'Manual JSON import'}</p><OfflineContentReview content={approvedOfflinePlan} /></details>}
       {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
       {!loading && rows.length === 0 && <EmptyState title="No nodes" description="No nodes received this deployment." />}
       {rows.length > 0 && (
@@ -1148,7 +1121,7 @@ export function DeploymentNodeDetail({
               <th className="px-2 py-1">Status</th>
               <th className="px-2 py-1">Pkgs</th>
               <th className="px-2 py-1">Error / log tail</th>
-              <th className="px-2 py-1">Applied</th>
+              <th className="px-2 py-1">Completed at</th>
               <th className="px-2 py-1"></th>
             </tr>
           </thead>
@@ -1165,7 +1138,7 @@ export function DeploymentNodeDetail({
                 <td className="px-2 py-1 text-xs text-text-secondary">
                   {r.Error ? <span className="text-destructive">{r.Error}</span> : null}
                   {r.LogTail ? (
-                    <pre className="whitespace-pre-wrap text-[10px] leading-tight text-text-secondary">{r.LogTail}</pre>
+                    <details><summary className="cursor-pointer">Execution log</summary><pre className="whitespace-pre-wrap text-[10px] leading-tight text-text-secondary">{r.LogTail}</pre></details>
                   ) : null}
                   {!r.Error && !r.LogTail ? '—' : null}
                 </td>
@@ -1271,7 +1244,7 @@ export function NodeConfigEditor({
             <div className="mt-1 text-xs text-text-secondary">
               {m === 'direct' && 'Run apt/dnf/winget upgrade against the upstream repos directly.'}
               {m === 'proxy' && 'Route package-manager traffic through a managed Squid proxy.'}
-              {m === 'airgapped' && 'Read packages from a pre-staged repo path on the node — no upstream traffic.'}
+              {m === 'airgapped' && 'Use a signed local content plan on a compatible Ubuntu/APT agent. Exact versions and explicit approval are required.'}
             </div>
           </button>
         ))}
@@ -1314,6 +1287,15 @@ function DeployForm({
   const [mode, setMode] = useState<'auto' | 'direct' | 'proxy' | 'airgapped'>('auto');
   const [reason, setReason] = useState('');
   const [packageAllowlist, setPackageAllowlist] = useState('');
+  const [offlineContent, setOfflineContent] = useState<OfflinePatchContent | null>(null);
+  const [offlineError, setOfflineError] = useState<string | null>(null);
+  const [offlineSource, setOfflineSource] = useState<'agent' | 'manual'>('agent');
+  const [publishedNodeId, setPublishedNodeId] = useState('');
+  const selectedPreparation = offlinePlanPreparation(nodes.find(node => node.id === publishedNodeId), offlineContent);
+  const [planRefresh, setPlanRefresh] = useState(0);
+  const preparationFinished = useCallback(() => {
+    setOfflineContent(null);setPublishedNodeId('');setPackageAllowlist('');setPlanRefresh(value=>value+1);
+  }, []);
   const [postPatchRescan, setPostPatchRescan] = useState(true);
   const [loadingNodes, setLoadingNodes] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1346,7 +1328,7 @@ function DeployForm({
     return () => {
       cancelled = true;
     };
-  }, [client, tenantId]);
+  }, [client, tenantId, planRefresh]);
 
   const filteredNodes = useMemo(() => {
     const needle = filter.trim().toLowerCase();
@@ -1360,6 +1342,9 @@ function DeployForm({
   }, [nodes, filter]);
 
   const toggle = (id: string) => {
+    if (mode === 'airgapped' && offlineSource === 'agent') {
+      setPublishedNodeId(''); setOfflineContent(null); setPackageAllowlist('');
+    }
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -1390,24 +1375,41 @@ function DeployForm({
       toast.error('Select at least one node');
       return;
     }
+    if (mode === 'airgapped' && (!offlineContent || ids.length !== 1)) {
+      const message = 'Load an offline content plan and select exactly one target node.';
+      setOfflineError(message);
+      toast.error(message);
+      return;
+    }
+    if (mode === 'airgapped' && offlineSource === 'agent') {
+      const node = nodes.find(n => n.id === publishedNodeId);
+      const current = node && agentPublishedOfflinePlan(node);
+      if (!current || ids[0] !== publishedNodeId || JSON.stringify(current) !== JSON.stringify(offlineContent)) {
+        setOfflineError('The agent-published plan is no longer current for this target. Refresh plans and select it again.');
+        return;
+      }
+    }
     setBusy(true);
     try {
       const resp = await client.createPatchDeployment({
         tenant_id: tenantId,
         node_ids: ids,
         mode,
+        offline_content: mode === 'airgapped' ? offlineContent ?? undefined : undefined,
+        published_offline_plan_sha256: mode === 'airgapped' && offlineSource === 'agent' ? offlineContent?.manifest_sha256 : undefined,
         reason: reason.trim() || undefined,
         package_allowlist: [...new Set(packageAllowlist.split(/[\s,]+/).filter(Boolean))],
-        post_patch_rescan: postPatchRescan,
+        post_patch_rescan: mode === 'airgapped' || postPatchRescan,
       });
       const awaitingCount = resp.awaiting_approval?.length ?? 0;
       const blocked = resp.gate_blocked?.length ?? 0;
       const failedCount = resp.failed?.length ?? 0;
-      let msg = `Patch deployment dispatched to ${resp.node_count} node${resp.node_count === 1 ? '' : 's'}`;
+      let msg = `Patch request evaluated for ${ids.length} selected node${ids.length === 1 ? '' : 's'}`;
       if (awaitingCount > 0) msg += `; ${awaitingCount} awaiting approval`;
       if (blocked > 0) msg += `; ${blocked} blocked by safety gate`;
       if (failedCount > 0) msg += `; ${failedCount} failed to dispatch`;
-      if (awaitingCount > 0) {
+      if (blocked > 0) msg += `: ${resp.gate_blocked?.slice(0, 3).map(row => row.reason).join('; ')}`;
+      if (awaitingCount > 0 || blocked > 0 || failedCount > 0) {
         toast.warning(msg);
       } else {
         toast.success(msg);
@@ -1423,8 +1425,8 @@ function DeployForm({
   const visibleSelectedCount = filteredNodes.filter((n) => selectedIds.has(n.id)).length;
 
   return (
-    <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-2xl flex-col border-l border-border bg-elevated shadow-2xl">
-      <div className="flex items-start justify-between border-b border-border p-6">
+    <aside className="fixed right-0 top-0 z-40 flex h-full w-full max-w-2xl flex-col border-l border-border bg-surface shadow-2xl">
+      <div className="flex shrink-0 items-start justify-between border-b border-border p-6">
         <div>
           <h3 className="text-lg font-semibold">Deploy patches</h3>
           <p className="mt-1 text-xs text-text-secondary">
@@ -1436,6 +1438,7 @@ function DeployForm({
         </Button>
       </div>
 
+      <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="space-y-3 border-b border-border p-6">
         <div className="grid grid-cols-2 gap-3">
           <label className="block text-sm">
@@ -1467,6 +1470,7 @@ function DeployForm({
           <input
             type="text"
             value={packageAllowlist}
+            disabled={mode === 'airgapped'}
             onChange={(e) => setPackageAllowlist(e.target.value)}
             className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm"
             placeholder="e.g. perl-base"
@@ -1476,8 +1480,56 @@ function DeployForm({
             Required dependencies may also change. Package selection is currently supported on Linux only.
           </span>
         </label>
+        {mode === 'airgapped' && <div className="space-y-2">
+          <p className="text-xs text-text-secondary">Ubuntu 24.04 amd64 with a compatible agent only. The target must have signed content staged locally. Select its agent-published plan, or import a public plan for controlled offline transfer. Operator approval is always required.</p>
+          <label className="block text-sm">Plan source
+            <select aria-label="Plan source" value={offlineSource} className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm" onChange={event => {
+              setOfflineSource(event.target.value as 'agent' | 'manual'); setPublishedNodeId(''); setOfflineContent(null); setOfflineError(null); setPackageAllowlist('');
+            }}>
+              <option value="agent">Agent-published plan</option>
+              <option value="manual">Manual JSON import</option>
+            </select>
+          </label>
+          {offlineSource === 'agent' ? <>
+            <OfflinePlanPreparation nodes={nodes} onPrepared={preparationFinished}/>
+            <label className="block text-sm">Available offline plan
+              <select aria-label="Available offline plan" value={publishedNodeId} disabled={loadingNodes} className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm" onChange={event => {
+                const node = nodes.find(n => n.id === event.target.value);
+                const plan = node && agentPublishedOfflinePlan(node);
+                setPublishedNodeId(plan ? node!.id : ''); setOfflineContent(plan ?? null); setOfflineError(null);
+                setPackageAllowlist(plan?.requested.map(pkg => pkg.name).join(', ') ?? '');
+                setSelectedIds(new Set(plan ? [node!.id] : []));
+              }}>
+                <option value="">Select a machine and its staged plan</option>
+                {nodes.map(node => {
+                  const plan = agentPublishedOfflinePlan(node);
+                  const preparation = offlinePlanPreparation(node, plan);
+                  return plan ? <option key={node.id} value={node.id}>{node.hostname} ({node.id.slice(0, 8)}) — {plan.requested.map(pkg => `${pkg.name} ${pkg.version}`).join(', ')}{preparation ? ` | Request ${preparation.jobId.slice(0,8)} | Completed ${new Date(preparation.completedAt).toLocaleString()}` : ' | Preparation details unavailable'}</option> : null;
+                })}
+              </select>
+            </label>
+            {publishedNodeId && <p className="text-xs text-text-secondary">{selectedPreparation ? <>Preparation request: <code>{selectedPreparation.jobId}</code>. Completed: {new Date(selectedPreparation.completedAt).toLocaleString()}. </> : 'Preparation details unavailable for this plan. Prepare a fresh plan to record its request and completion time. '}One latest validated plan is shown per machine; preparing the same content updates its preparation details without adding a duplicate option.</p>}
+            <Button variant="outline" size="sm" disabled={loadingNodes} onClick={() => {
+              setOfflineContent(null); setPublishedNodeId(''); setPackageAllowlist(''); setOfflineError(null); setPlanRefresh(value => value + 1);
+            }}>Refresh plans</Button>
+            <p className="text-xs text-text-secondary">The latest validated plan from each machine is shown for five minutes after its agent report. If none is available, stage or restage signed content on the target and wait for its next heartbeat. Selecting a plan selects its one target machine.</p>
+          </> : <label className="block text-sm">Offline content-plan file
+            <input type="file" accept=".json,application/json" className="mt-1 block w-full" onChange={async event => {
+              const file = event.target.files?.[0];
+              setOfflineContent(null); setOfflineError(null); setPackageAllowlist('');
+              if (!file) return;
+              try {
+                if (file.size > 131072) throw new Error('The offline content plan is too large.');
+                const plan = parseOfflinePatchContent(await file.text());
+                setOfflineContent(plan); setPackageAllowlist(plan.requested.map(pkg => pkg.name).join(', '));
+              } catch (error) { setOfflineError(errorMessage(error, 'The offline content plan could not be read.')); }
+            }} />
+          </label>}
+          {offlineError && <p role="alert" className="text-xs text-destructive">{offlineError}</p>}
+          {offlineContent && <OfflineContentReview content={offlineContent} />}
+        </div>}
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={postPatchRescan} onChange={(e) => setPostPatchRescan(e.target.checked)} />
+          <input type="checkbox" checked={mode === 'airgapped' || postPatchRescan} disabled={mode === 'airgapped'} onChange={(e) => setPostPatchRescan(e.target.checked)} />
           Refresh package inventory after patching
         </label>
         <div className="flex items-center gap-2">
@@ -1501,7 +1553,7 @@ function DeployForm({
         </p>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="p-6">
         {loadError && (
           <div className="mb-3 rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{loadError}</div>
         )}
@@ -1557,7 +1609,9 @@ function DeployForm({
         )}
       </div>
 
-      <div className="flex items-center justify-end gap-2 border-t border-border p-4">
+      </div>
+
+      <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border p-4">
         <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
@@ -1681,7 +1735,7 @@ function ApprovalQueue({
             const expired = a.expires_at && new Date(a.expires_at).getTime() < Date.now();
             const denyState = actionState[approvalActionKey(a)];
             return (
-              <tr key={a.id} className="border-t border-border align-top">
+              <Fragment key={a.id}><tr className="border-t border-border align-top">
                 <td className="px-3 py-2 text-xs text-text-secondary">{new Date(a.created_at).toLocaleString()}</td>
                 <td className="px-3 py-2 font-mono text-xs">{a.deployment_id.slice(0, 8)}</td>
                 <td className="px-3 py-2 font-mono text-xs">{a.node_id.slice(0, 8)}</td>
@@ -1694,7 +1748,7 @@ function ApprovalQueue({
                   {a.package_scope_available
                     ? <><div>{a.package_allowlist?.length ? a.package_allowlist.join(', ') : 'All eligible packages'}</div>
                         {!!a.package_denylist?.length && <div>Excluded: {a.package_denylist.join(', ')}</div>}
-                        <div className="text-text-secondary">Required dependencies may also change.</div></>
+                        {a.offline_content ? <div className="text-text-secondary">Exact signed local plan shown below.</div> : <div className="text-text-secondary">Required dependencies may also change.</div>}</>
                     : <span className="text-text-secondary">Package scope unavailable</span>}
                 </td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -1724,6 +1778,8 @@ function ApprovalQueue({
                   ) : null}
                 </td>
               </tr>
+              {a.offline_content && <tr><td colSpan={7} className="px-3 pb-4"><p className="mb-2 text-xs text-text-secondary">Plan source: {a.published_offline_plan_sha256 ? 'Agent-published plan' : 'Manual JSON import'}</p><OfflineContentReview content={a.offline_content} /></td></tr>}
+              </Fragment>
             );
           })}
         </tbody>
@@ -1786,9 +1842,7 @@ function loadErrorName(key: LoadErrorKey): string {
   }
 }
 
-function proxyActionKey(proxy: SquidProxy): string {
-  return `proxy:${proxy.ID}`;
-}
+
 
 function windowActionKey(window: MaintenanceWindow): string {
   return `window:${window.ID}`;

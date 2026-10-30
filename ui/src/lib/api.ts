@@ -1577,6 +1577,21 @@ export interface NodeSummary {
   ip_geo?: NodeIPGeo;
 }
 
+export interface ApprovedOfflineRepository {
+  id: string;
+  name: string;
+  keyring_sha256: string;
+  suite: string;
+  component: string;
+  enabled: boolean;
+}
+
+export interface OfflinePreparationStatus {
+  job_id?: string;
+  status: string;
+  message?: string;
+}
+
 export interface FleetEnrollTarget {
   host: string;
   port?: number;
@@ -4949,6 +4964,8 @@ export class APIClient {
   }
 
   async createPatchDeployment(payload: {
+	 published_offline_plan_sha256?: string;
+	 offline_content?: OfflinePatchContent;
     tenant_id: string;
     node_ids?: string[];
     mode?: "direct" | "proxy" | "airgapped" | "auto";
@@ -5022,6 +5039,24 @@ export class APIClient {
     );
   }
 
+  async getOfflineRepository(nodeId: string): Promise<{repository: ApprovedOfflineRepository | null; repository_path?: string}> {
+    return this.request(`/api/v1/patch/offline/repository?node_id=${encodeURIComponent(nodeId)}`);
+  }
+
+  async saveOfflineRepository(nodeId: string, repository: ApprovedOfflineRepository): Promise<{repository: ApprovedOfflineRepository; repository_path: string}> {
+    return this.request('/api/v1/patch/offline/repository', {method: 'PUT', body: JSON.stringify({node_id: nodeId, repository})});
+  }
+
+  async prepareOfflinePlan(nodeId: string, repositoryId: string, packages: {name: string; version: string}[]): Promise<OfflinePreparationStatus> {
+    return this.request('/api/v1/patch/offline/prepare', {method: 'POST', body: JSON.stringify({node_id: nodeId, repository_id: repositoryId, packages})});
+  }
+
+  async getOfflinePreparation(nodeId: string, jobId?: string): Promise<OfflinePreparationStatus> {
+    const params = new URLSearchParams({node_id: nodeId});
+    if (jobId) params.set('job_id', jobId);
+    return this.request(`/api/v1/patch/offline/prepare?${params}`);
+  }
+
   async upsertNodePatchConfig(payload: {
     node_id: string;
     mode: "direct" | "proxy" | "airgapped";
@@ -5086,6 +5121,15 @@ export class APIClient {
   }
 
   // ── Squid proxies ──────────────────────────────────────────────────────
+  async getProxyManagement(id: string): Promise<ProxyManagementView> {
+    return this.request<ProxyManagementView>(`/api/v1/patch/proxies/${encodeURIComponent(id)}/management`);
+  }
+  async bindProxyManagement(id: string, payload: {node_id: string; client_cidrs: string[]; probe_urls: string[]}): Promise<{management: ProxyManagement}> {
+    return this.request(`/api/v1/patch/proxies/${encodeURIComponent(id)}/management`, {method: 'POST', body: JSON.stringify(payload)});
+  }
+  async requestProxyLifecycle(id: string, action: 'install' | 'reconfigure' | 'remove', payload: {expected_revision: number; whitelist: string[]; client_cidrs: string[]; probe_urls: string[]; squid_version?: string}): Promise<{job_id: string; status: string}> {
+    return this.request(`/api/v1/patch/proxies/${encodeURIComponent(id)}${action === 'remove' ? '' : `/${action}`}`, {method: action === 'remove' ? 'DELETE' : 'POST', body: JSON.stringify(payload)});
+  }
   async listSquidProxies(tenantId: string): Promise<{ proxies: SquidProxy[] }> {
     return this.request<{ proxies: SquidProxy[] }>(
       `/api/v1/patch/proxies?tenant_id=${encodeURIComponent(tenantId)}`,
@@ -7428,6 +7472,8 @@ export interface PatchDeployResponse {
 
 // PatchApproval mirrors patchApprovalResponse on the server.
 export interface PatchApproval {
+	 published_offline_plan_sha256?: string;
+	 offline_content?: OfflinePatchContent;
   package_scope_available?: boolean;
   package_allowlist?: string[];
   package_denylist?: string[];
@@ -7444,6 +7490,18 @@ export interface PatchApproval {
   created_at: string;
   expires_at: string;
   job_id?: string;
+}
+
+export interface OfflinePatchContent {
+  format: 2;
+  manifest_sha256: string;
+  installed_status_sha256: string;
+  keyring_sha256: string;
+  suite: string;
+  component: string;
+  architecture: string;
+  requested: { name: string; version: string }[];
+  resolved: { name: string; version: string }[];
 }
 
 // ── Patch Management — Wave C (proxy / airgapped / Squid / windows) ──────
@@ -7471,12 +7529,28 @@ export interface MaintenanceWindow {
   UpdatedAt: string;
 }
 
+export interface ProxyManagement {
+  proxy_id: string;
+  node_id: string;
+  revision: number;
+  client_cidrs: string[];
+  probe_urls: string[];
+  last_job_id?: string;
+}
+export interface ProxyManagementView {
+  message?: string;
+  management: ProxyManagement | null;
+  job: Job | null;
+  eligible: boolean;
+  reason: string;
+}
 export interface SquidProxy {
+  Evidence?: {state: string; message: string; job_id?: string};
   ID: string;
   TenantID: string;
   Host: string;
   Port: number;
-  Status: "installing" | "healthy" | "degraded" | "removing" | "removed";
+  Status: "registered" | "installing" | "healthy" | "degraded" | "removing" | "removed";
   Whitelist: string[];
   LastValidatedAt?: string;
   LastError?: string;

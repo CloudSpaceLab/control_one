@@ -89,7 +89,28 @@ func (s *Store) UpsertNodePatchConfig(ctx context.Context, in NodePatchConfig) (
 	if mode == "" {
 		mode = "direct"
 	}
-	row := s.db.QueryRowContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var tenant uuid.UUID
+	if err = tx.QueryRowContext(ctx, `SELECT tenant_id FROM nodes WHERE id=$1 FOR UPDATE`, in.NodeID).Scan(&tenant); err != nil {
+		return nil, err
+	}
+	if mode == "proxy" {
+		if in.ProxyID == nil {
+			return nil, fmt.Errorf("proxy selection required")
+		}
+		var status string
+		if err = tx.QueryRowContext(ctx, `SELECT status FROM squid_proxies WHERE id=$1 AND tenant_id=$2 FOR SHARE`, *in.ProxyID, tenant).Scan(&status); err != nil {
+			return nil, err
+		}
+		if status == "removing" || status == "removed" {
+			return nil, fmt.Errorf("proxy is being removed or was removed")
+		}
+	}
+	row := tx.QueryRowContext(ctx, `
 		INSERT INTO node_patch_config (node_id, mode, proxy_id, window_id, updated_at)
 		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (node_id) DO UPDATE SET
@@ -103,6 +124,9 @@ func (s *Store) UpsertNodePatchConfig(ctx context.Context, in NodePatchConfig) (
 	if err := row.Scan(&c.NodeID, &c.Mode, &c.ProxyID, &c.WindowID, &c.UpdatedAt); err != nil {
 		return nil, fmt.Errorf("upsert node patch config: %w", err)
 	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
 	return &c, nil
 }
 
@@ -112,6 +136,9 @@ func (s *Store) UpsertNodePatchConfig(ctx context.Context, in NodePatchConfig) (
 func (s *Store) CreateMaintenanceWindow(ctx context.Context, in MaintenanceWindow) (*MaintenanceWindow, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
+	}
+	if in.AllowRepos == nil {
+		in.AllowRepos = []string{}
 	}
 	nodeIDs := make([]string, 0, len(in.NodeIDs))
 	for _, n := range in.NodeIDs {
@@ -178,7 +205,21 @@ func (s *Store) ListMaintenanceWindows(ctx context.Context, tenantID uuid.UUID) 
 
 // MarkMaintenanceWindowOpen flips status → 'open' + records the opener.
 func (s *Store) MarkMaintenanceWindowOpen(ctx context.Context, id uuid.UUID, openedBy *uuid.UUID) error {
-	return s.setMaintenanceWindowStatus(ctx, id, "open", openedBy, false)
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE maintenance_windows SET status='open', opened_by=COALESCE($2,opened_by),updated_at=NOW() WHERE id=$1 AND force_closed_at IS NULL AND opens_at<=NOW() AND closes_at>NOW() AND cardinality(allow_repos)=0`, id, openedBy)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("maintenance window cannot open: missing, revoked, expired or network enforcement unavailable")
+	}
+	return nil
 }
 
 // MarkMaintenanceWindowClosing flips status → 'closing' (firewall close in
@@ -189,7 +230,21 @@ func (s *Store) MarkMaintenanceWindowClosing(ctx context.Context, id uuid.UUID) 
 
 // MarkMaintenanceWindowClosed flips status → 'closed'.
 func (s *Store) MarkMaintenanceWindowClosed(ctx context.Context, id uuid.UUID) error {
-	return s.setMaintenanceWindowStatus(ctx, id, "closed", nil, false)
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE maintenance_windows SET status='closed',updated_at=NOW() WHERE id=$1 AND cardinality(allow_repos)=0`, id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("maintenance window closure cannot be confirmed")
+	}
+	return nil
 }
 
 // MarkMaintenanceWindowAborted flips status → 'aborted' for windows that
@@ -201,7 +256,11 @@ func (s *Store) MarkMaintenanceWindowAborted(ctx context.Context, id uuid.UUID) 
 // ForceCloseMaintenanceWindow flips an open/closing window to 'closed' and
 // stamps force_closed_at. Used by the operator panic button.
 func (s *Store) ForceCloseMaintenanceWindow(ctx context.Context, id uuid.UUID) error {
-	return s.setMaintenanceWindowStatus(ctx, id, "closed", nil, true)
+	if s.db == nil {
+		return errors.New("store database not initialized")
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE maintenance_windows SET status=CASE WHEN cardinality(allow_repos)>0 THEN 'closing' ELSE 'closed' END, force_closed_at=NOW(),updated_at=NOW() WHERE id=$1`, id)
+	return err
 }
 
 func (s *Store) setMaintenanceWindowStatus(ctx context.Context, id uuid.UUID, status string, openedBy *uuid.UUID, force bool) error {
@@ -238,7 +297,7 @@ func (s *Store) setMaintenanceWindowStatus(ctx context.Context, id uuid.UUID, st
 
 // ── squid_proxies ─────────────────────────────────────────────────────────
 
-// CreateSquidProxy inserts a fresh proxy row in 'installing' state.
+// CreateSquidProxy records connection details without claiming installation.
 func (s *Store) CreateSquidProxy(ctx context.Context, in SquidProxy) (*SquidProxy, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
@@ -256,7 +315,7 @@ func (s *Store) CreateSquidProxy(ctx context.Context, in SquidProxy) (*SquidProx
 	}
 	row := s.db.QueryRowContext(ctx, `
 		INSERT INTO squid_proxies (tenant_id, host, port, status, whitelist)
-		VALUES ($1, $2, $3, 'installing', $4)
+		VALUES ($1, $2, $3, 'registered', $4)
 		RETURNING id, tenant_id, host, port, status, whitelist,
 		          last_validated_at, last_error, created_at, updated_at
 	`, in.TenantID, in.Host, port, whitelistBytes)

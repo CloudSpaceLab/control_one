@@ -1397,6 +1397,8 @@ func (s *Server) registerRoutes() {
 	// Patch management completion — Wave C: per-node config, maintenance
 	// windows, Squid proxies.
 	s.baseRouter.HandleFunc("/api/v1/patch/config", s.handlePatchConfig)
+	s.baseRouter.HandleFunc("/api/v1/patch/offline/repository", s.handleOfflineRepository)
+	s.baseRouter.HandleFunc("/api/v1/patch/offline/prepare", s.handleOfflinePreparation)
 	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows", s.handleMaintenanceWindowsCollection)
 	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows/", s.handleMaintenanceWindowSubroute)
 	s.baseRouter.HandleFunc("/api/v1/patch/proxies", s.handleSquidProxiesCollection)
@@ -2497,10 +2499,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request, nodeID
 		}
 	}
 	if req.Labels != nil {
-		labels := map[string]any{}
-		for key, value := range *req.Labels {
-			labels[key] = value
-		}
+		labels := preservePatchEvidence(node.Labels, *req.Labels)
 		if err := s.store.UpdateNodeLabels(r.Context(), nodeID, labels); err != nil {
 			s.logger.Error("update node labels", zap.Error(err))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
