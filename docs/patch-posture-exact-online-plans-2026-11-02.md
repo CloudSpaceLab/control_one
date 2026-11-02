@@ -1,0 +1,87 @@
+# Exact online patch plans — 2 November 2026
+
+> **Repeat live operator demonstration, 2 November 2026:** demonstrated the real saved package/canary/window scope, unsaved scheduled-mode/UTC examples, failed host readiness and disabled activation. Reopened the earlier real CA-package deployment and matching installed inventory, while showing its no-security-baseline/unknown verification and blocked promotion. Saved policy revision 7 remained unchanged; no new installation or schedule was created. [Repeatable steps and exact evidence limits](patch-posture-phase4-automation-2026-11-02.md#repeatable-operator-demonstration).
+
+> **Scheduled execution engineering, 2 November 2026:** durable exact-plan scheduling, individual canary authority, narrow automatic follower gates, current host readiness, policy withdrawal/stop controls and retained execution receipts are implemented, tested in isolation and deployed locally for readiness verification. The live Docker readiness check reports unknown service health and incomplete service inventory; installation remains disabled. [Procedure, passing conditions, test evidence and current limits](patch-posture-phase4-automation-2026-11-02.md). Earlier draft-only statements below are historical; full-host/production qualification and overall P4-07 remain open.
+
+> **Phase 4 operational controls, 2 November 2026:** stable queue/history pagination, complete retained-review snapshot exports, guarded archive-before-purge retention, explicit in-app notification recipients/deduplication and scoped disabled scheduled/automatic policy drafts are implemented. Dedicated database/API regressions and 53 affected/shared UI tests passed, plus TypeScript, scoped lint and production build. See the [operator procedure, live evidence and limits](patch-posture-phase4-operations-2026-11-02.md). Installation remains recommendation-only; saving a draft does not qualify service/reboot outcomes, activate an executor or complete Phase 5. VM/full-host and external recovery/trust gates remain open.
+
+> **Recommendation-only governance, 2 November 2026:** tenant priority rules, reviewed owners/deadlines, expiring context/exceptions, escalation queue and scoped evidence export are implemented in the existing lab. Forty UI checks and sequential Go/API/storage regressions passed; the live demo created review records and no new patch-installation jobs. Lab policy examples are not a production policy. That initial bounded checkpoint is historical; the operational-controls follow-up above qualifies pagination/export, retention and in-app escalation. Full Phase 4 remains open for complete support/health and active automation acceptance. [Walkthrough and limits](patch-posture-phase4-governance-2026-11-02.md).
+
+This checkpoint adds a bounded exact-plan workflow for root Ubuntu 24.04 amd64 APT agents in direct and proxy modes. It does not close Phase 3, Phase 4, full-host recovery, managed proxy lifecycle or production rollout qualification.
+
+## What changed and why
+
+Previously, a package name could describe work whose resolved versions changed before installation. A capable agent now prepares an exact plan first: refresh authenticated repository metadata, resolve the explicitly selected installed packages and dependencies, acquire the archives, and record the installed baseline, relevant sources/preferences/trust, transport and acquired-content hashes. Preparation installs no packages.
+
+Approval binds that plan to one node, its explicit mode, package scope, current transport and expiry. Plans expire one hour after preparation; approval cannot extend that deadline. Mandatory inventory refresh remains separate from service health or vulnerability resolution. Reboot impact is unknown and service impact requires operator review.
+
+Installation uses the acquired exact versions without updating repository metadata or downloading replacements. Before unpacking, an APT pre-install hook checks the selected plan, baseline, content, expiry and maintenance window under the package-manager lock. The production agent also rechecks the linked server job, approved deployment and current policy at that point. A matching nonce receipt is required after APT succeeds. Changed or unavailable evidence rejects execution rather than silently expanding scope.
+
+Direct acquisition overrides ambient proxy configuration. Proxy acquisition uses the saved repository proxy, restricts configured repository sources to its reviewed host allowlist and standard HTTP(S) ports, and refuses direct fallback. This is package-route qualification within this bounded engine; it does not qualify remote Squid installation, systemd recovery or remote-client authorization.
+
+The implementation follows the documented [APT configuration and pre-install hook behavior](https://manpages.debian.org/bookworm/apt/apt.conf.5.en.html) and [APT exact-version, download-only and no-download operations](https://manpages.debian.org/bookworm/apt/apt-get.8.en.html).
+
+## Repeat the operator workflow
+
+1. Select the intended tenant. Open **Patch posture → Deploy patches**.
+2. Choose **direct** or **proxy** explicitly. Proxy uses the proxy already saved in that node's patch settings. Explicit selection retains the node's maintenance-calendar association.
+3. Under **Prepare exact online plan**, select a compatible current machine and enter 1–100 installed package names, for example `liblzma5`. This preparation profile requires an explicit scope; it does not mean upgrade the whole machine.
+4. Click **Prepare exact online plan**. Wait for **succeeded**. A queued/running request is not a completed plan and authorizes no installation. Read the request ID and available prepared scope. Existing plans cannot be selected while replacement preparation is running.
+5. Click **Use prepared direct/proxy plan for …**. Check the exact current/proposed versions and all dependency operations. A zero-operation plan must say that no package changes were resolved; it is not evidence of a security fix.
+6. Check three things together: **target/scope**, **exact change and impact**, and **expiry/maintenance timing**. Reboot and service effects require vendor/application review; do not infer them from a successful resolver.
+7. Enter a meaningful reason and submit. The new exact-plan path requires separate approval, even if older tenant settings made approval optional. The selected scope is locked and post-patch inventory refresh is mandatory.
+8. In **Approvals**, inspect the same exact plan and deadline. An inspection-only demonstration should be denied. A real canary may be approved only after the operator has defined health probes, recovery and the permitted window. Changed sources, installed baseline, proxy configuration or selected plan require a fresh preparation and approval.
+9. For an authorized installation, follow **Deployments → Per-node**. Compare execution status and actual PKGS with later inventory, assessment, health and reboot evidence. An installation result alone cannot authorize promotion or establish remediation.
+
+## Live application evidence
+
+Tenant: Local Development. Existing enrolled node: `phase0-ubuntu-lab`, `d033fa85-5796-48ae-8e8a-f82706387326`.
+
+- Preparation `1cd93e2e-30f5-473b-95b7-890714c8b504` succeeded for already-current `liblzma5`. The exact plan correctly contained no package changes. Plan SHA-256: `b1461ff242d934b45d38f53b4cc8739569e388cf865e6f6a96ea33c285d06595`.
+- Preparation `d6149c2e-207c-4688-aeb8-4c04c8661f5b` succeeded for `ca-certificates`. The app displayed `20260601~24.04.1 → 20260816ubuntu0.24.04.1`, with no additional dependency operation. Plan SHA-256: `38ccb98a1fc57f0f16870b873b04e6d7ff92e9534664620ca764a7e4b8220b8f`.
+- The latter review was prepared at **09:45:26 Lagos**, expiring **10:45:26 Lagos**. Inspection deployment `fb48120d` showed the same plan and approval deadline. It was denied in the app. Database read-back confirmed denied, **zero installation jobs**, and **zero pending approvals** for the tenant.
+- The demo used a temporary public-content-only mirror on the existing internal Docker network. The Ubuntu signed InRelease/index and archive hashes were verified; no unsigned repository exception or external route was enabled. The public CA archive matched SHA-256 `8a0a754aaafed72cc8efb8c1731808133284a84fbfc76a4fcc73fce9e01b4187`.
+- Original APT sources were restored byte-for-byte and the temporary mirror stopped. This source change invalidates the prepared plans. Do not reuse the recorded demonstration hashes as current deployment inputs.
+- A final live check showed the historical successful request alongside **No current published direct plan is available for this target**, with no plan-selection action. The old receipt remains history; restoring the sources correctly withdrew deployable discovery.
+- The live walkthrough exposed a UI remount that cleared preparation state during node refresh. The component now stays mounted; the regression checks target retention after completion/refresh. Scope is visible and replacement preparation disables old-plan selection.
+
+### Separately approved real canary
+
+After the inspection-only demonstration, a fresh preparation `ea4650ad` created plan `43541dcf116cc10b3a523b7b2cbc852ff8fbb767a8bfe6eb2584f8f721d83e8f` at 09:53:25 Lagos, expiring 10:53:25. Deployment `896236db-2ca2-4d83-9fa5-d3a25570293f` was separately approved in the app. Job `549d7da5-71df-4c78-8e91-07984dcd8869` executed through the deployed production agent's APT pre-install authorization hook.
+
+- Actual `ca-certificates` changed from `20260601~24.04.1` to `20260816ubuntu0.24.04.1`; OpenSSL remained `3.0.13-0ubuntu3.16`.
+- The matching pre-install guard/nonce receipt was verified. The job durably succeeded; the app showed **APPLIED, PKGS 1**, completed 09:58:13 Lagos. This exercised the real linked-job/approval/policy RPC from inside the APT hook, in addition to the isolated fault tests.
+- `dpkg --audit` was clean, trusted Control One TLS returned `ok`, and the existing enrolled agent continued heartbeats. Fresh native inventory and reassessment in the app showed the new CA version.
+- Verification settled to **verification_unknown**, reason **no_security_baseline**; promotion remained blocked. No selected advisory finding established a security-remediation baseline for this CA update. Service health was also unknown in this container. Neither a package upgrade nor zero selected findings proves a security fix.
+- The temporary mirror was stopped again and original APT sources restored. Zero pending approvals remained. This authorized canary intentionally changed one lab package; the earlier inspection-only request still has zero installation jobs. Windows configuration/service/enrollment remained untouched.
+- Screenshot evidence: `phase4-online-real-applied-20261102.png` and `phase4-online-real-inventory-20261102.png` under the local evidence directory.
+
+Screenshots and executable/native test artifacts are local evidence under `tmp/local/patch-posture-demo/phase3-offline-20261029/`; they are not source files to commit.
+
+## Verification bounds
+
+- Contract, agent, API and dedicated PostgreSQL tests cover exact identity, mandatory approval/rescan, scope/transport/runtime/calendar drift, durable duplicate/concurrent preparation, receipt provenance, expired/late completion, transactional dispatch and generic-job bypass rejection.
+- Related Go package regressions passed. Server integration tests require both `DATABASE_URL` and `PATCH_SECURITY_TEST_DATABASE_URL` to point at the dedicated `controlone_patch_security_test_phase2_20261028` database; their unavailable localhost default was corrected for the test invocation. The application database was not used as a test database.
+- Native authenticated APT preparation passed in direct and explicit proxy modes. Tests rejected substituted content, replaced selection, changed sources/context and unavailable proxy without upstream fallback; preparation left installed state unchanged.
+- A fresh **unenrolled**, network-none official Ubuntu container performed a real proxy-acquired `liblzma5` upgrade `5.6.1+really5.4.5-1ubuntu0.3 → 5.6.1+really5.4.5-1ubuntu0.4`. Its loopback-only repository/proxy fixture exercised the APT pre-install hook and matching nonce receipt. Replay against the changed baseline rejected. The fixture was stopped afterward. This is not proof of managed Squid/systemd recovery or public upstream connectivity.
+- Final **43 UI tests passed**, covering selected exact plan/one target, mandatory refresh, expired/invalid plan handling, polling failures, late responses, completion refresh retention and replacement selection. TypeScript, scoped lint and production build passed.
+- The isolated native proxy upgrade used a local verifier test executable; the separately approved direct canary above additionally exercised the deployed app/agent authorization hook with a real package change. Managed proxy/full-host/service qualification remains outside that bounded evidence.
+
+## Preserved runtime and rollback
+
+The existing startup script `scripts/local.ps1` remains the launcher. No new PowerShell script, enrollment token, VM or credential was created. Windows agent/service configuration and enrollment were not changed.
+
+- Active local control plane: `controlplane-online-plan-20261102`, SHA-256 `bbf8d37d10e786aeb3228a430ddd39bbab80735e09dd4a9cbf5df6ce05ffe364`.
+- Active lab agent: `nodeagent-online-plan-final-20261102`, SHA-256 `780ab2db77a46239eb56abbd7bcbd28d48578eaf7df1e9b88bf320e4d27e364a`. The final candidate also rejects shell-expansion characters in privileged hook paths; focused path/online/agent regressions passed before activation.
+- Lab agent configuration SHA-256 remained `fb9c597d247b27728656691107dc33218f5e0f0119d0ca00e839f69a84d87030`.
+- Lab dpkg status SHA-256 stayed `aa4586526b451279c477c7fff5edfa06247f4b668efcf982cb80b089911a3a42` through the inspection-only demo. The authorized real canary changed it to `df9d9535fb469def049b908ad3ca3eb3197caed9c21a719ddbf7f1a21ae29432`; `dpkg --audit` was clean and trusted TLS health returned `ok` afterward. The retained previous agent executable is a binary rollback, not a rollback of that package upgrade.
+- Original/restored `ubuntu.sources` SHA-256: `92d2ff28918561a6c5e4ebf241769a57b13eebd1504d77d7a3a77a73e368c5ec`.
+- Previous control-plane executable is retained as `controlplane-plan-review-final`. To roll back locally, select it in the existing ignored candidate Compose override and run the existing local launcher.
+- Previous lab agent executable is retained at `/var/lib/control-one/rollback-online-20261102/controlone-agent.previous`. Replace the candidate executable atomically with that retained file and restart only the existing lab container. Preserve its configuration, enrollment and execution journal; do not clear receipts to force replay.
+
+No commit or push was made for this checkpoint. Local candidate overrides, downloaded archives, binaries, caches, backups, screenshots and runtime files remain outside the intended source change.
+
+## Still open
+
+The parent Phase 4 acceptance remains open: broader platforms, measured service/reboot/compatibility impact, complete recommendation consistency, the remaining production urgency/governance and automation scope. The subsequent [recommendation-only governance checkpoint](patch-posture-phase4-governance-2026-11-02.md) adds configurable policy, ownership and evidence export; it does not close the parent phase. Full-host power-loss/reboot/recovery remains deferred. Managed proxy lifecycle/client authorization and the wider production pilot remain separate gates. See P4-04c/P4-04d in the [canonical acceptance list](patch-posture-phase-acceptance.md).

@@ -47,6 +47,46 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 		return nil, err
 	}
 	defer tx.Rollback()
+	var scheduled struct {
+		AutomationRunID string `json:"automation_run_id"`
+	}
+	if err = json.Unmarshal(p.Payload, &scheduled); err != nil {
+		return nil, err
+	}
+	var automationRun uuid.UUID
+	if scheduled.AutomationRunID != "" {
+		automationRun, err = uuid.Parse(scheduled.AutomationRunID)
+		if err != nil {
+			return nil, errors.New("invalid automation authorization")
+		}
+		run, binding, e := checkAutomationRunTx(ctx, tx, p.TenantID, automationRun)
+		if e != nil {
+			return nil, e
+		}
+		if run.Status == "dispatched" {
+			var old NodePatchState
+			e = tx.QueryRowContext(ctx, `SELECT id,deployment_id,node_id,tenant_id,status,job_id FROM node_patch_state WHERE job_id=$1 AND tenant_id=$2 AND deployment_id=$3 AND node_id=$4`, run.ExecutionJobID, p.TenantID, p.DeploymentID, p.NodeID).Scan(&old.ID, &old.DeploymentID, &old.NodeID, &old.TenantID, &old.Status, &old.JobID)
+			return &old, e
+		}
+		if run.ApprovalID != p.ApprovalID || run.ActorID != p.ApproverID || run.PolicyHash != p.PolicyHash || binding.node != p.NodeID || binding.deployment != p.DeploymentID || binding.mode != p.Mode {
+			return nil, errors.New("automation dispatch identity mismatch")
+		}
+	} else if p.ApprovalID != uuid.Nil {
+		// Serialize the retained-schedule check with enqueue's approval lock.
+		// Without this lock a manual dispatch could observe no schedule, wait
+		// for enqueue, then consume the newly scheduled approval immediately.
+		var lockedApproval uuid.UUID
+		if err = tx.QueryRowContext(ctx, `SELECT id FROM patch_approvals WHERE id=$1 AND tenant_id=$2 FOR UPDATE`, p.ApprovalID, p.TenantID).Scan(&lockedApproval); err != nil {
+			return nil, err
+		}
+		var scheduledApproval bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM patch_automation_runs WHERE approval_id=$1)`, p.ApprovalID).Scan(&scheduledApproval); err != nil {
+			return nil, err
+		}
+		if scheduledApproval {
+			return nil, errors.New("approval has a retained automation authorization; use its schedule or create a fresh request")
+		}
+	}
 	var lockedNode uuid.UUID
 	if err = tx.QueryRowContext(ctx, `SELECT id FROM nodes WHERE id=$1 AND tenant_id=$2 FOR SHARE`, p.NodeID, p.TenantID).Scan(&lockedNode); err != nil {
 		return nil, err
@@ -55,6 +95,7 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 		return nil, err
 	}
 	var requested struct {
+		OnlinePlan                 *patchsupport.OnlinePlan     `json:"online_plan"`
 		PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256"`
 		PostPatchRescan            bool                         `json:"post_patch_rescan"`
 		OfflineContent             *patchsupport.OfflineContent `json:"offline_content"`
@@ -64,6 +105,9 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 		Window                     *patchsupport.Window         `json:"patch_window"`
 	}
 	if err = json.Unmarshal(p.Payload, &requested); err != nil {
+		return nil, err
+	}
+	if err = validateOnlineDispatch(ctx, tx, p, requested.OnlinePlan, requested.Allowlist, requested.Denylist, requested.PostPatchRescan, requested.Runtime, requested.Window); err != nil {
 		return nil, err
 	}
 	if err := requested.OfflineContent.Validate(p.Mode, requested.Allowlist, requested.Denylist); err != nil {
@@ -281,6 +325,15 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 	}
 	if linked != 1 {
 		return nil, errors.New("patch job linkage was not persisted")
+	}
+	if automationRun != uuid.Nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE patch_automation_runs SET status='dispatched',reason='Exact execution committed',execution_job_id=$2,checked_at=NOW() WHERE id=$1`, automationRun, jobID); err != nil {
+			return nil, err
+		}
+		body, _ := json.Marshal(map[string]any{"run_id": automationRun, "job_id": jobID, "approval_id": p.ApprovalID})
+		if _, err = tx.ExecContext(ctx, `INSERT INTO patch_governance_events(tenant_id,kind,revision,actor,document) SELECT tenant_id,'automation_dispatched',policy_revision,actor_id::text,$2 FROM patch_automation_runs WHERE id=$1`, automationRun, body); err != nil {
+			return nil, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err

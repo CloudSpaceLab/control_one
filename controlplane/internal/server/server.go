@@ -947,6 +947,7 @@ type Server struct {
 	// clockOverride is optional — tests override it to deterministically
 	// drive the reaper without real wall-clock delays.
 	clockOverride func() time.Time
+	patchReviewStop func()
 	// auditAsync controls whether recordAudit dispatches the store write on a
 	// goroutine. Production defaults to true; tests flip it to false per-server
 	// to keep audit writes deterministic without touching a shared global.
@@ -1399,6 +1400,10 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/patch/config", s.handlePatchConfig)
 	s.baseRouter.HandleFunc("/api/v1/patch/offline/repository", s.handleOfflineRepository)
 	s.baseRouter.HandleFunc("/api/v1/patch/offline/prepare", s.handleOfflinePreparation)
+	s.baseRouter.HandleFunc("/api/v1/patch/online/prepare", s.handleOnlinePreparation)
+	s.baseRouter.HandleFunc("/api/v1/patch/reviews", s.handlePatchGovernance)
+	s.baseRouter.HandleFunc("/api/v1/patch/review-operations",s.handlePatchReviewOperations)
+	s.baseRouter.HandleFunc("/api/v1/patch/automation-runs",s.handlePatchAutomation)
 	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows", s.handleMaintenanceWindowsCollection)
 	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows/", s.handleMaintenanceWindowSubroute)
 	s.baseRouter.HandleFunc("/api/v1/patch/proxies", s.handleSquidProxiesCollection)
@@ -3341,6 +3346,7 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 
 // Start begins serving HTTP requests.
 func (s *Server) Start() error {
+	s.startPatchReviewOperations()
 	s.startEnrollmentReaper()
 	s.startCorrelationEngine()
 	s.startBehavioralRollup()
@@ -3363,6 +3369,7 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
+	if s.patchReviewStop!=nil{s.patchReviewStop()}
 	s.stopLogDumpMaintenance()
 	if s.webhookBridge != nil {
 		s.webhookBridge.Stop()

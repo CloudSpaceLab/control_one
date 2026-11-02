@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MaintenanceWindow, PatchApproval, PatchDeployment, SquidProxy } from '../lib/api';
 import { PatchManagement } from './PatchManagement';
+import {onlineFixture,onlineNode} from '../lib/onlinePatchPlan.testFixtures';
 
 const mocks = vi.hoisted(() => {
   const getPatchSummary = vi.fn();
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => {
   const denyPatchApproval = vi.fn();
   const listNodes = vi.fn();
   const createPatchDeployment = vi.fn();
+ const prepareOnlinePlan=vi.fn();const getOnlinePreparation=vi.fn();
   const listPatchDeploymentNodes = vi.fn();
   const toastSuccess = vi.fn();
   const toastError = vi.fn();
@@ -33,6 +35,7 @@ const mocks = vi.hoisted(() => {
     denyPatchApproval,
     listNodes,
     createPatchDeployment,
+    prepareOnlinePlan,getOnlinePreparation,
     listPatchDeploymentNodes,
     toastSuccess,
     toastError,
@@ -41,6 +44,7 @@ const mocks = vi.hoisted(() => {
     tenantList: [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }],
     setCurrentTenantId: vi.fn(),
     apiClient: {
+ prepareOnlinePlan:(...args:unknown[])=>prepareOnlinePlan(...args),getOnlinePreparation:(...args:unknown[])=>getOnlinePreparation(...args),
       listNodes: (params: unknown) => listNodes(params),
       createPatchDeployment: (payload: unknown) => createPatchDeployment(payload),
       listPatchDeploymentNodes: (id: string) => listPatchDeploymentNodes(id),
@@ -130,6 +134,23 @@ const sampleApproval: PatchApproval = {
 };
 
 describe('PatchManagement', () => {
+  it('requires and submits the selected exact online plan with its one target and mandatory verification',async()=>{
+    const user=userEvent.setup();const now=Date.now();const node=onlineNode(now);const plan=onlineFixture(now);
+    mocks.listNodes.mockResolvedValue({data:[node]});mocks.createPatchDeployment.mockResolvedValue({awaiting_approval:[{node_id:node.id}]});
+    mocks.getOnlinePreparation.mockResolvedValue({status:'succeeded',job_id:'prepared-online-job',message:'Prepared without installation'});
+    render(<PatchManagement/>);await user.click(await screen.findByRole('button',{name:/Deploy patches/}));
+    await user.click(await screen.findByRole('checkbox',{name:'Select node online-lab'}));
+    expect(screen.getByRole('button',{name:'Deploy to 1 node'})).toBeDisabled();
+    await user.selectOptions(screen.getByRole('combobox',{name:'Mode'}),'direct');
+    await user.selectOptions(await screen.findByRole('combobox',{name:'Online preparation target'}),node.id);
+    await waitFor(()=>expect(mocks.listNodes.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.getByRole('combobox',{name:'Online preparation target'})).toHaveValue(node.id);
+    await user.click(await screen.findByRole('button',{name:'Use prepared direct plan for online-lab'}));
+    expect(screen.getByRole('region',{name:'Exact online plan review'})).toHaveTextContent('Required dependency');
+    expect(screen.getByRole('checkbox',{name:'Refresh package inventory after patching'})).toBeDisabled();
+    await user.click(screen.getByRole('button',{name:'Deploy to 1 node'}));
+    await waitFor(()=>expect(mocks.createPatchDeployment).toHaveBeenCalledWith(expect.objectContaining({node_ids:[node.id],mode:'direct',online_plan:plan,package_allowlist:['liba'],post_patch_rescan:true})));
+  });
   it('distinguishes proxy registration from installation and connectivity qualification',async()=>{
     const user=userEvent.setup();
     render(<PatchManagement/>);
@@ -139,6 +160,14 @@ describe('PatchManagement', () => {
     expect(screen.getByRole('heading',{name:'Register patch proxy'})).toBeInTheDocument();
     expect(screen.getByText(/does not install or reconfigure Squid/)).toBeInTheDocument();
     expect(screen.queryByRole('button',{name:'Install proxy'})).not.toBeInTheDocument();
+  });
+  it('disables an expired exact plan even when the approval row has a later legacy deadline',async()=>{
+    const user=userEvent.setup();
+    mocks.listPatchApprovals.mockResolvedValue({data:[{...sampleApproval,mode:'airgapped',offline_content:{format:3,manifest_sha256:'a'.repeat(64),installed_status_sha256:'b'.repeat(64),keyring_sha256:'c'.repeat(64),suite:'noble-updates',component:'main',architecture:'amd64',requested:[{name:'liba',version:'2'}],resolved:[{name:'liba',version:'2'}],review:{prepared_at:'2020-01-01T10:00:00Z',expires_at:'2020-01-01T11:00:00Z',reboot:'unknown',service_impact:'requires_operator_review',changes:[{name:'liba',installed_version:'1',proposed_version:'2',role:'requested'}]}}}],pagination:{total:1,limit:100,offset:0,count:1}});
+    render(<PatchManagement/>);
+    await user.click(await screen.findByRole('button',{name:/Approvals \(/}));
+    expect(await screen.findByRole('button',{name:/Approve patch deployment for node/})).toBeDisabled();
+    expect(mocks.approvePatchApproval).not.toHaveBeenCalled();
   });
   it('retains approved offline versions and refreshes a pending result without certifying remediation', async () => {
     const user = userEvent.setup();
@@ -270,6 +299,7 @@ describe('PatchManagement', () => {
     mocks.forceCloseMaintenanceWindow.mockResolvedValue({ status: 'closed' });
     mocks.approvePatchApproval.mockResolvedValue({ ...sampleApproval, status: 'approved' });
     mocks.denyPatchApproval.mockResolvedValue({ ...sampleApproval, status: 'denied' });
+ mocks.getOnlinePreparation.mockResolvedValue({status:'idle'});mocks.prepareOnlinePlan.mockResolvedValue({job_id:'online-job',status:'running'});
   });
 
   afterEach(() => {

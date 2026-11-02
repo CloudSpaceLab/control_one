@@ -49,5 +49,9 @@ func (s *Server) nodeUpdateCandidates(ctx context.Context, node *storage.Node, p
 			}
 		}
 	}
+	for i := range views {
+		review := offlinebundle.ExplainUpdateCandidate(views[i], time.Now().UTC())
+		views[i].Review = &review
+	}
 	return views, nil
 }

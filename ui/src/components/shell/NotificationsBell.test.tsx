@@ -7,6 +7,9 @@ import * as useApiClientModule from '@/hooks/useApiClient';
 import * as useTenantModule from '@/providers/TenantProvider';
 
 describe('NotificationsBell', () => {
+  it('routes patch review escalation to the tenant review workspace',async()=>{
+    const user=userEvent.setup();const api={getUnreadNotificationsCount:vi.fn().mockResolvedValue(1),listNotifications:vi.fn().mockResolvedValue({data:[{id:'patch-notification',tenant_id:'tenant-1',recipient_id:'user-1',kind:'patch_review_escalation',case_id:'',case_title:'Patch review required: CVE-EXAMPLE · liba',created_at:new Date().toISOString()}]}),markNotificationRead:vi.fn().mockResolvedValue(undefined),markAllNotificationsRead:vi.fn()};vi.spyOn(useTenantModule,'useTenant').mockReturnValue({currentTenantId:'tenant-1',currentTenant:null,tenants:[],loading:false,error:null,setCurrentTenantId:vi.fn(),refresh:vi.fn()});vi.spyOn(useApiClientModule,'useApiClient').mockReturnValue(api as never);render(<MemoryRouter basename="/console" initialEntries={["/console/"]}><NotificationsBell/></MemoryRouter>);await user.click(await screen.findByRole('button',{name:'Notifications, 1 unread'}));const link=await screen.findByRole('link',{name:/Patch review required/});expect(link).toHaveAttribute('href','/console/infrastructure/patch?view=reviews');await user.click(link);await waitFor(()=>expect(api.markNotificationRead).toHaveBeenCalledWith('patch-notification','tenant-1'));
+  });
   it('shows the unread count and marks all notifications read', async () => {
     const user = userEvent.setup();
     const api = {

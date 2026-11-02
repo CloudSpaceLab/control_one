@@ -26,6 +26,7 @@ import (
 // fields are optional and gated by delta logic to avoid resending unchanged
 // data on every interval.
 type heartbeatPayload struct {
+	PublishedOnlinePlan   *patchsupport.OnlinePlanReport    `json:"published_online_plan,omitempty"`
 	PublishedOfflinePlans *patchsupport.PublishedPlanReport `json:"published_offline_plans,omitempty"`
 	PatchRuntime          *patchsupport.Runtime             `json:"patch_runtime,omitempty"`
 	NetworkObservations   []agentNetworkObservation         `json:"network_observations,omitempty"`
@@ -190,6 +191,7 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 	patchRuntime := detectedPatchRuntime()
 	payload := heartbeatPayload{
 		PublishedOfflinePlans: heartbeatPublishedOfflinePlan(ctx),
+		PublishedOnlinePlan:   heartbeatOnlinePlan(),
 		PatchRuntime:          &patchRuntime,
 		NetworkObservations:   heartbeatInterfaceObservations(),
 		AgentVersion:          heartbeatAgentVersion(),
@@ -282,6 +284,8 @@ func sendHeartbeat(ctx context.Context, client *api.Client, log *zap.Logger, nod
 			// heartbeat, so we want the result available before this call
 			// returns. The actual exec lives in firewall_exec.go.
 			executeFirewallAction(ctx, client, log, action)
+		case strings.HasPrefix(action, patchsupport.PrepareOnlineJob+":"):
+			go executeOnlinePreparation(ctx, client, log, action)
 		case strings.HasPrefix(action, patchsupport.PrepareOfflineJob+":"):
 			go executeOfflinePreparation(ctx, client, log, action)
 		case strings.HasPrefix(action, "patch.deploy_direct:"),

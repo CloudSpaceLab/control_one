@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
@@ -28,15 +29,16 @@ type ContentFile struct {
 // Manifest describes local staged bytes. Its digest must be bound by trusted
 // approval; hashing this document does not establish publisher authenticity.
 type Manifest struct {
-	Format                int           `json:"format"`
-	Suite                 string        `json:"suite"`
-	Component             string        `json:"component"`
-	Architecture          string        `json:"architecture"`
-	KeyringSHA256         string        `json:"keyring_sha256"`
-	InstalledStatusSHA256 string        `json:"installed_status_sha256"`
-	Requested             []Selection   `json:"requested"`
-	Resolved              []Selection   `json:"resolved,omitempty"`
-	Files                 []ContentFile `json:"files"`
+	Review                *patchsupport.OfflineReview `json:"review,omitempty"`
+	Format                int                         `json:"format"`
+	Suite                 string                      `json:"suite"`
+	Component             string                      `json:"component"`
+	Architecture          string                      `json:"architecture"`
+	KeyringSHA256         string                      `json:"keyring_sha256"`
+	InstalledStatusSHA256 string                      `json:"installed_status_sha256"`
+	Requested             []Selection                 `json:"requested"`
+	Resolved              []Selection                 `json:"resolved,omitempty"`
+	Files                 []ContentFile               `json:"files"`
 }
 
 type Snapshot struct {
@@ -249,7 +251,13 @@ func (s *Snapshot) Digest() string { return s.digest }
 // ApprovalContent returns a detached identity for trusted approval storage.
 // It does not authorize execution or establish complete dependency closure.
 func (s *Snapshot) ApprovalContent() patchsupport.OfflineContent {
-	return patchsupport.OfflineContent{Format: s.manifest.Format, ManifestSHA256: s.digest, InstalledStatusSHA256: s.manifest.InstalledStatusSHA256, KeyringSHA256: s.manifest.KeyringSHA256, Suite: s.manifest.Suite, Component: s.manifest.Component, Architecture: s.manifest.Architecture, Requested: append([]Selection(nil), s.manifest.Requested...), Resolved: append([]Selection(nil), s.manifest.Resolved...)}
+	var review *patchsupport.OfflineReview
+	if s.manifest.Review != nil {
+		copy := *s.manifest.Review
+		copy.Changes = append([]patchsupport.PlanChange(nil), copy.Changes...)
+		review = &copy
+	}
+	return patchsupport.OfflineContent{Review: review, Format: s.manifest.Format, ManifestSHA256: s.digest, InstalledStatusSHA256: s.manifest.InstalledStatusSHA256, KeyringSHA256: s.manifest.KeyringSHA256, Suite: s.manifest.Suite, Component: s.manifest.Component, Architecture: s.manifest.Architecture, Requested: append([]Selection(nil), s.manifest.Requested...), Resolved: append([]Selection(nil), s.manifest.Resolved...)}
 }
 
 // CheckApprovedArchives requires every approved identity field to match the
@@ -280,6 +288,10 @@ func (s *Snapshot) Verify(expected string) error {
 }
 
 func (s *Snapshot) verify(expected string) error {
+	identity := s.ApprovalContent()
+	if err := identity.RequireCurrent(time.Now().UTC()); err != nil {
+		return err
+	}
 	for _, path := range []string{s.root, s.spec.Repository, s.spec.Keyring, filepath.Join(s.root, "manifest.json")} {
 		if err := localPath(path); err != nil {
 			return err

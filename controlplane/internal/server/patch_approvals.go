@@ -27,6 +27,7 @@ const (
 
 // patchApprovalResponse is the wire shape for a single patch_approvals row.
 type patchApprovalResponse struct {
+	OnlinePlan                 *patchsupport.OnlinePlan     `json:"online_plan,omitempty"`
 	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
 	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
 	PackageScopeAvailable      bool                         `json:"package_scope_available"`
@@ -459,6 +460,11 @@ func (s *Server) patchApprovalResponseWithScope(ctx context.Context, a *storage.
 		resp.PackageScopeAvailable = false
 		return resp
 	}
+	if policy.OnlinePlan != nil && policy.OnlinePlan.Validate(policy.OnlinePlan.Review.PreparedAt) != nil {
+		resp.PackageScopeAvailable = false
+		return resp
+	}
+	resp.OnlinePlan = policy.OnlinePlan
 	resp.OfflineContent = policy.OfflineContent
 	resp.PublishedOfflinePlanSHA256 = policy.PublishedOfflinePlanSHA256
 	resp.PackageAllowlist = policy.Allowlist

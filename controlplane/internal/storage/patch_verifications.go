@@ -225,7 +225,11 @@ func (s *Store) ListNodePatchVerifications(ctx context.Context, tenantID, nodeID
 
 func (s *Store) PatchVerificationAllowsPromotion(ctx context.Context, jobID uuid.UUID) (bool, error) {
 	var ready bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM patch_verifications v JOIN nodes n ON n.id=v.node_id JOIN node_assessments a ON a.id=v.assessment_id JOIN node_inventory_sync i ON i.node_id=v.node_id JOIN node_patch_health h ON h.node_id=v.node_id JOIN vulnerability_publication f ON f.id=1
+	err := s.db.QueryRowContext(ctx, patchPromotionQuery, jobID).Scan(&ready)
+	return ready, err
+}
+
+const patchPromotionQuery = `SELECT EXISTS(SELECT 1 FROM patch_verifications v JOIN nodes n ON n.id=v.node_id JOIN node_assessments a ON a.id=v.assessment_id JOIN node_inventory_sync i ON i.node_id=v.node_id JOIN node_patch_health h ON h.node_id=v.node_id JOIN vulnerability_publication f ON f.id=1
  WHERE v.job_id=$1 AND v.state IN ('verified_fixed','verified_removed') AND v.execution_completed_at>NOW()-INTERVAL '24 hours'
  AND a.id=(SELECT id FROM node_assessments WHERE node_id=v.node_id ORDER BY started_at DESC,id DESC LIMIT 1)
  AND (a.evidence->>'inventory_revision')::bigint=n.inventory_revision
@@ -235,6 +239,4 @@ func (s *Store) PatchVerificationAllowsPromotion(ctx context.Context, jobID uuid
  AND h.evidence->>'services_complete'='true' AND h.evidence->>'consumers_complete'='true'
  AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(COALESCE(v.execution_health->'active_services','[]'::jsonb)) AS units(unit) WHERE COALESCE(h.evidence->'service_checks'->>units.unit,'unknown')<>'active')
  AND h.evidence->>'boot_id'=v.evidence->'health'->>'boot_id'
- AND NOT EXISTS(SELECT 1 FROM patch_verifications newer WHERE newer.node_id=v.node_id AND newer.execution_completed_at>v.execution_completed_at))`, jobID).Scan(&ready)
-	return ready, err
-}
+ AND NOT EXISTS(SELECT 1 FROM patch_verifications newer WHERE newer.node_id=v.node_id AND newer.execution_completed_at>v.execution_completed_at))`

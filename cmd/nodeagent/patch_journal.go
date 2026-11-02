@@ -60,7 +60,7 @@ func openPatchJournal(path string) (*patchJournal, error) {
 	for id, entry := range j.entries {
 		if entry.Result == nil {
 			entry.Result = &completedAction{Action: entry.Action, JobID: id, Status: "failed", Error: "agent restarted during reserved patch execution; outcome unknown, manual reconciliation required"}
-			if entry.Action == "patch.prepare_offline" {
+			if entry.Action == "patch.prepare_offline" || entry.Action == patchsupport.PrepareOnlineJob {
 				entry.Result.Error = "preparation interrupted; no installation authorized; inspect staged content and submit a fresh preparation request"
 			}
 			if patchsupport.IsProxyLifecycle(entry.Action) {
@@ -259,5 +259,5 @@ func isPatchDeploymentAction(action string) bool {
 }
 
 func isDurablePatchAction(action string) bool {
-	return isPatchDeploymentAction(action) || action == "patch.prepare_offline" || patchsupport.IsProxyLifecycle(action)
+	return isPatchDeploymentAction(action) || action == "patch.prepare_offline" || action == patchsupport.PrepareOnlineJob || patchsupport.IsProxyLifecycle(action)
 }

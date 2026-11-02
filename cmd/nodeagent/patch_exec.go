@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
+	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +18,7 @@ import (
 
 	"github.com/CloudSpaceLab/control_one/internal/api"
 	"github.com/CloudSpaceLab/control_one/internal/offlineapt"
+	"github.com/CloudSpaceLab/control_one/internal/onlineapt"
 	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
 
@@ -30,6 +34,7 @@ const (
 // patchActionDetail mirrors the server-side patchJobPayload. The id fields
 // drive heartbeat correlation; ProxyURL / StagedRepoPath are mode-specific.
 type patchActionDetail struct {
+	OnlinePlan                 *patchsupport.OnlinePlan     `json:"online_plan,omitempty"`
 	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
 	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
 	Window                     *patchsupport.Window         `json:"patch_window,omitempty"`
@@ -130,6 +135,10 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 		return
 	}
 	actualRuntime := detectedPatchRuntime()
+	if actualRuntime.OnlinePlanVersion == 1 && detail.Mode != "airgapped" && detail.OnlinePlan == nil {
+		enqueueCompletedAction(completedAction{Action: jobType, JobID: jobID, Status: "failed", Error: "exact online plan required; prepare and approve a new request"})
+		return
+	}
 	if err := detail.Window.Validate(time.Now().UTC()); err != nil {
 		enqueueCompletedAction(completedAction{Action: jobType, JobID: jobID, Status: "failed", Error: err.Error()})
 		return
@@ -140,7 +149,12 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 	}
 
 	cmdName, args, env, label, ok := patchCommandForJob(effectiveJobType, detail)
+	online := detail.OnlinePlan != nil
 	offline := effectiveJobType == patchJobAirgapped
+	if online {
+		ok = actualRuntime.OnlinePlanVersion == 1
+		label = "approved exact acquired APT plan"
+	}
 	if offline {
 		ok = actualRuntime.Validate("airgapped") == nil && patchOfflineRoot != ""
 		label = "approved signed local APT plan"
@@ -184,6 +198,17 @@ func executePatchAction(ctx context.Context, client *api.Client, log *zap.Logger
 			output, runErr = offlineapt.InstallPublished(execCtx, patchOfflineRoot, *detail.OfflineContent, detail.PublishedOfflinePlanSHA256)
 		} else {
 			output, runErr = offlineapt.Install(execCtx, patchOfflineRoot, *detail.OfflineContent)
+		}
+	} else if online {
+		if err := validateOnlineTransport(execCtx, client, detail.NodeID, detail.Mode, detail.OnlinePlan.TransportContext, detail.ProxyURL, jobID, detail.OnlinePlan.SHA256); err != nil {
+			runErr = err
+		} else {
+			binary, err := os.Executable()
+			if err != nil {
+				runErr = err
+			} else {
+				output, runErr = onlineapt.Install(execCtx, onlineapt.Spec{}, *detail.OnlinePlan, binary, detail.Window, onlineapt.Authorization{ConfigPath: patchOnlineConfigPath, JobID: jobID})
+			}
 		}
 	} else {
 		output, runErr = cmd.CombinedOutput()
@@ -334,6 +359,15 @@ func patchCommandForJob(jobType string, detail patchActionDetail) (cmd string, a
 }
 
 func validatePatchPackagePolicy(detail patchActionDetail) error {
+	if detail.OnlinePlan != nil {
+		p := detail.OnlinePlan
+		allow := normalizePatchPackageList(detail.PackageAllowlist)
+		sort.Strings(allow)
+		if p.Validate(time.Now().UTC()) != nil || p.NodeID != detail.NodeID || p.Mode != detail.Mode || p.ProxyURL != detail.ProxyURL || !reflect.DeepEqual(p.Requested, allow) || len(detail.PackageDenylist) > 0 || detail.OfflineContent != nil || !detail.PostPatchRescan {
+			return fmt.Errorf("exact online plan does not match target, mode, scope, transport, expiry or verification policy")
+		}
+	}
+
 	if detail.Mode == "airgapped" && !detail.PostPatchRescan {
 		return fmt.Errorf("offline patch installation requires fresh inventory after execution")
 	}

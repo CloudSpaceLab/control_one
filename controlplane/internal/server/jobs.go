@@ -1112,6 +1112,7 @@ func agentReadableJobType(jobType string) bool {
 	switch strings.TrimSpace(jobType) {
 	case JobTypeAgentUpdate,
 		"patch.prepare_offline",
+		"patch.prepare_online",
 		JobTypeFirewallRuleAdd,
 		JobTypeFirewallRuleDelete,
 		JobTypePatchDeployDirect,
@@ -1181,7 +1182,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request, jobID u
 	}
 	// A dispatched package-manager command cannot be stopped by marking its
 	// database job cancelled. Doing so also races away its real completion.
-	if job.Type == JobTypePatchDeployDirect || job.Type == JobTypePatchDeployProxy || job.Type == JobTypePatchDeployAirgapped || job.Type == "patch.prepare_offline" {
+	if job.Type == JobTypePatchDeployDirect || job.Type == JobTypePatchDeployProxy || job.Type == JobTypePatchDeployAirgapped || job.Type == "patch.prepare_offline" || job.Type == "patch.prepare_online" {
 		http.Error(w, "dispatched patch execution cannot be cancelled; retain and reconcile its actual outcome", http.StatusConflict)
 		return
 	}
@@ -1274,6 +1275,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if strings.HasPrefix(strings.TrimSpace(req.Type), "patch.deploy_") || req.Type == "patch.prepare_online" || req.Type == "patch.prepare_offline" {
+		http.Error(w, "use the tenant-scoped patch preparation and approval workflow", http.StatusForbidden)
+		return
+	}
 	s.configureJobIntegrations()
 	definition, ok := jobDefinitionForType(req.Type)
 	if !ok {

@@ -7,6 +7,8 @@ import (
 )
 
 type Runtime struct {
+	OnlinePlanVersion        int    `json:"online_plan_version,omitempty"`
+	OfflinePlanFormat        int    `json:"offline_plan_format,omitempty"`
 	ProxyLifecycleVersion    int    `json:"proxy_lifecycle_version,omitempty"`
 	OfflinePrepareVersion    int    `json:"offline_prepare_version,omitempty"`
 	OS                       string `json:"os"`

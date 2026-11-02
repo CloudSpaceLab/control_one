@@ -107,12 +107,12 @@ export function NotificationsBell(): JSX.Element {
             {items.map((notification) => (
               <li key={notification.id}>
                 <Link
-                  to="/cases"
+                  to={notification.kind==='patch_review_escalation'?'/infrastructure/patch?view=reviews':'/cases'}
                   className="flex flex-col gap-0.5 px-3 py-2 hover:bg-elevated"
                   onClick={() => void markRead(notification)}
                 >
                   <span className="text-xs font-medium text-foreground">
-                    {notification.kind === 'case_assigned'
+                    {notification.kind==='patch_review_escalation'?notification.case_title:notification.kind === 'case_assigned'
                       ? `${notification.actor_name || 'A teammate'} assigned ${notification.case_title}`
                       : `${notification.actor_name || 'A teammate'} mentioned you in ${notification.case_title}`}
                   </span>

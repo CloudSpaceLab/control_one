@@ -9,9 +9,15 @@ import { useTenant } from '../providers/TenantProvider';
 import { AllTenantPatchSummary } from '../features/patch-management/AllTenantPatchSummary';
 import { PatchAssessmentNotice } from '../features/patch-management/PatchAssessmentNotice';
 import { toast } from 'sonner';
-import { agentPublishedOfflinePlan, offlinePlanPreparation, parseOfflinePatchContent } from '../lib/offlinePatchContent';
+import { agentPublishedOfflinePlan, offlinePlanPreparation, parseOfflinePatchContent, requireCurrentOfflinePlan } from '../lib/offlinePatchContent';
+import {OnlinePlanReview} from '../features/patch-management/OnlinePlanReview';
+import {OnlinePlanPreparation} from '../features/patch-management/OnlinePlanPreparation';
+import {currentOnlinePlan,hasOnlinePlanner,requireCurrentOnlinePlan,onlinePlanForReview} from '../lib/onlinePatchPlan';
+import { OfflineContentReview } from '../features/patch-management/OfflineContentReview';
 import { OfflinePlanPreparation } from '../features/patch-management/OfflinePlanPreparation';
 import {ProxyManagementDialog} from '../features/patch-management/ProxyManagementDialog';
+import {PatchReviewPanel} from '../features/patch-management/PatchReviewPanel';
+import {PatchOperationsPanel} from '../features/patch-management/PatchOperationsPanel';
 import type {
   PatchDeployment,
   PatchDeploymentSummary,
@@ -22,28 +28,13 @@ import type {
   NodeSummary,
   PatchApproval,
   OfflinePatchContent,
+  ExactOnlinePlan,
 } from '../lib/api';
-
-function OfflineContentReview({ content }: { content: OfflinePatchContent }): JSX.Element {
-  return <section aria-label="Offline content review" className="space-y-2 rounded border border-border p-3 text-xs">
-    <p className="font-semibold">Exact offline installation plan</p>
-    <p>{content.suite} / {content.component} / {content.architecture}</p>
-    <p>Requested: {content.requested.map(pkg => `${pkg.name} = ${pkg.version}`).join(', ')}</p>
-    <p className="font-semibold">Packages to install or reinstall, including dependencies</p>
-    <ul>{content.resolved.map(pkg => <li key={pkg.name} className="font-mono break-all">{pkg.name} = {pkg.version}</li>)}</ul>
-    <details><summary>Content and machine integrity checks</summary>
-      <p className="break-all">Manifest SHA-256: {content.manifest_sha256}</p>
-      <p className="break-all">Installed-state SHA-256: {content.installed_status_sha256}</p>
-      <p className="break-all">Signing-key SHA-256: {content.keyring_sha256}</p>
-    </details>
-    <p>Approval applies to this staged content and machine baseline. A changed plan requires a new request. Reinstalling an existing version does not prove vulnerability remediation.</p>
-  </section>;
-}
 
 // PatchManagement separates measured fleet posture from bounded recent
 // deployment activity, while keeping proxy, maintenance-window and approval
 // operations tenant-scoped.
-type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals';
+type Tab = 'deployments' | 'proxies' | 'windows' | 'approvals' | 'reviews';
 type LoadErrorKey = 'posture' | 'deployments' | 'proxies' | 'windows' | 'approvals';
 type LoadErrors = Partial<Record<LoadErrorKey, string>>;
 
@@ -59,7 +50,7 @@ type PendingApprovalDeny = { approval: PatchApproval; error?: string };
 export function PatchManagement(): JSX.Element {
   const client = useApiClient();
   const { currentTenantId } = useTenant();
-  const [tab, setTab] = useState<Tab>('deployments');
+  const [tab, setTab] = useState<Tab>(()=>new URLSearchParams(window.location.search).get('view')==='reviews'?'reviews':'deployments');
   const [posture, setPosture] = useState<PatchDeploymentSummary | null>(null);
   const [deployments, setDeployments] = useState<PatchDeployment[]>([]);
   const [proxies, setProxies] = useState<SquidProxy[]>([]);
@@ -253,6 +244,7 @@ export function PatchManagement(): JSX.Element {
           onClick={() => setTab('approvals')}
           label={tabLabel('Approvals', pendingApprovalTotal, loadErrors.approvals)}
         />
+        {currentTenantId&&<TabButton active={tab==='reviews'} onClick={()=>setTab('reviews')} label="Review policy & ownership"/>}
       </div>
 
       {hasLoadErrors ? (
@@ -275,6 +267,7 @@ export function PatchManagement(): JSX.Element {
         </Alert>
       ) : null}
 
+      {tab==='reviews'&&currentTenantId&&<><PatchReviewPanel tenantId={currentTenantId}/><PatchOperationsPanel tenantId={currentTenantId}/></>}
       {tab === 'deployments' && (
         <DeploymentsPanel
           loading={loading}
@@ -582,6 +575,7 @@ function WindowsPanel({
 }): JSX.Element {
   const client = useApiClient();
   const [busy, setBusy] = useState<string | null>(null);
+
   const [actionState, setActionState] = useState<Record<string, InlineActionState>>({});
   const [pendingForceClose, setPendingForceClose] = useState<PendingForceClose | null>(null);
   void tenantId;
@@ -1109,6 +1103,7 @@ export function DeploymentNodeDetail({
         <DeploymentPackageScope deployment={deployment} />
         <p className="mt-2 text-xs text-text-secondary">PKGS is the actual number upgraded on each node. It can be 0 when the requested packages are already current.</p>
       </section>
+      {onlinePlanForReview(deployment.Summary?.online_plan)&&<details className="mb-4"><summary className="mb-2 cursor-pointer text-sm">Approved exact online plan</summary><OnlinePlanReview plan={onlinePlanForReview(deployment.Summary?.online_plan)!}/></details>}
       {approvedOfflinePlan && <details className="mb-4"><summary className="mb-2 cursor-pointer text-sm">Approved offline content plan</summary><p className="mb-2 text-xs text-text-secondary">Plan source: {deployment.Summary?.published_offline_plan_sha256 ? 'Agent-published plan' : 'Manual JSON import'}</p><OfflineContentReview content={approvedOfflinePlan} /></details>}
       {error && <div className="rounded border border-destructive/50 bg-destructive/10 p-3 text-sm">{error}</div>}
       {!loading && rows.length === 0 && <EmptyState title="No nodes" description="No nodes received this deployment." />}
@@ -1288,13 +1283,16 @@ function DeployForm({
   const [reason, setReason] = useState('');
   const [packageAllowlist, setPackageAllowlist] = useState('');
   const [offlineContent, setOfflineContent] = useState<OfflinePatchContent | null>(null);
+ const [onlinePlan,setOnlinePlan]=useState<ExactOnlinePlan|null>(null);
+ const [planNow,setPlanNow]=useState(Date.now);
+ useEffect(()=>{const timer=setInterval(()=>setPlanNow(Date.now()),1000);return()=>clearInterval(timer);},[]);
   const [offlineError, setOfflineError] = useState<string | null>(null);
   const [offlineSource, setOfflineSource] = useState<'agent' | 'manual'>('agent');
   const [publishedNodeId, setPublishedNodeId] = useState('');
   const selectedPreparation = offlinePlanPreparation(nodes.find(node => node.id === publishedNodeId), offlineContent);
   const [planRefresh, setPlanRefresh] = useState(0);
   const preparationFinished = useCallback(() => {
-    setOfflineContent(null);setPublishedNodeId('');setPackageAllowlist('');setPlanRefresh(value=>value+1);
+    setOfflineContent(null);setOnlinePlan(null);setPublishedNodeId('');setPackageAllowlist('');setPlanRefresh(value=>value+1);
   }, []);
   const [postPatchRescan, setPostPatchRescan] = useState(true);
   const [loadingNodes, setLoadingNodes] = useState(false);
@@ -1342,6 +1340,10 @@ function DeployForm({
   }, [nodes, filter]);
 
   const toggle = (id: string) => {
+ setOnlinePlan(null);
+    if (mode === 'airgapped' && offlineContent) {
+      try { requireCurrentOfflinePlan(offlineContent); } catch (error) { setOfflineError((error as Error).message); return; }
+    }
     if (mode === 'airgapped' && offlineSource === 'agent') {
       setPublishedNodeId(''); setOfflineContent(null); setPackageAllowlist('');
     }
@@ -1354,6 +1356,7 @@ function DeployForm({
   };
 
   const selectAllVisible = () => {
+ setOnlinePlan(null);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       filteredNodes.forEach((n) => next.add(n.id));
@@ -1362,6 +1365,7 @@ function DeployForm({
   };
 
   const clearVisible = () => {
+ setOnlinePlan(null);
     setSelectedIds((prev) => {
       const next = new Set(prev);
       filteredNodes.forEach((n) => next.delete(n.id));
@@ -1375,11 +1379,18 @@ function DeployForm({
       toast.error('Select at least one node');
       return;
     }
+    if(onlinePlan){
+      try{requireCurrentOnlinePlan(onlinePlan);const node=nodes.find(n=>n.id===onlinePlan.node_id);const current=node&&currentOnlinePlan(node,onlinePlan.mode);if(ids.length!==1||ids[0]!==onlinePlan.node_id||mode!==onlinePlan.mode||!current||JSON.stringify(current)!==JSON.stringify(onlinePlan))throw new Error('Selected online plan no longer matches the current target, mode or agent report. Refresh and select again.');}
+      catch(error){toast.error((error as Error).message);return;}
+    }else if(mode!=='airgapped'&&nodes.some(n=>ids.includes(n.id)&&hasOnlinePlanner(n))){toast.error('Prepare and select an exact direct or proxy plan for this target before deployment.');return;}
     if (mode === 'airgapped' && (!offlineContent || ids.length !== 1)) {
       const message = 'Load an offline content plan and select exactly one target node.';
       setOfflineError(message);
       toast.error(message);
       return;
+    }
+    if (mode === 'airgapped' && offlineContent) {
+      try { requireCurrentOfflinePlan(offlineContent); } catch (error) { setOfflineError((error as Error).message); return; }
     }
     if (mode === 'airgapped' && offlineSource === 'agent') {
       const node = nodes.find(n => n.id === publishedNodeId);
@@ -1396,10 +1407,11 @@ function DeployForm({
         node_ids: ids,
         mode,
         offline_content: mode === 'airgapped' ? offlineContent ?? undefined : undefined,
+ online_plan: mode!=='airgapped'?onlinePlan??undefined:undefined,
         published_offline_plan_sha256: mode === 'airgapped' && offlineSource === 'agent' ? offlineContent?.manifest_sha256 : undefined,
         reason: reason.trim() || undefined,
         package_allowlist: [...new Set(packageAllowlist.split(/[\s,]+/).filter(Boolean))],
-        post_patch_rescan: mode === 'airgapped' || postPatchRescan,
+        post_patch_rescan: !!onlinePlan || mode === 'airgapped' || postPatchRescan,
       });
       const awaitingCount = resp.awaiting_approval?.length ?? 0;
       const blocked = resp.gate_blocked?.length ?? 0;
@@ -1445,7 +1457,7 @@ function DeployForm({
             <span className="text-text-secondary">Mode</span>
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as typeof mode)}
+              onChange={(e) => {setMode(e.target.value as typeof mode);setOnlinePlan(null);}}
               className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm"
             >
               <option value="auto">auto (per-node config)</option>
@@ -1470,7 +1482,7 @@ function DeployForm({
           <input
             type="text"
             value={packageAllowlist}
-            disabled={mode === 'airgapped'}
+            disabled={mode === 'airgapped'||!!onlinePlan}
             onChange={(e) => setPackageAllowlist(e.target.value)}
             className="mt-1 w-full rounded border border-border bg-surface-1 px-2 py-1 text-sm"
             placeholder="e.g. perl-base"
@@ -1480,6 +1492,9 @@ function DeployForm({
             Required dependencies may also change. Package selection is currently supported on Linux only.
           </span>
         </label>
+        {(mode==='direct'||mode==='proxy')&&nodes.some(n=>hasOnlinePlanner(n,planNow))&&<OnlinePlanPreparation key={mode} nodes={nodes} mode={mode} onPrepared={preparationFinished} onSelected={plan=>{setOnlinePlan(plan);setPackageAllowlist(plan?.requested.join(', ')??'');if(plan){setSelectedIds(new Set([plan.node_id]));setPostPatchRescan(true);}}}/>}
+        {onlinePlan&&<OnlinePlanReview plan={onlinePlan}/>}
+        {mode==='auto'&&nodes.some(n=>selectedIds.has(n.id)&&hasOnlinePlanner(n,planNow))&&<p role="alert" className="text-xs text-warning">This target requires an exact online plan. Choose direct or proxy, prepare its plan and select it before deployment.</p>}
         {mode === 'airgapped' && <div className="space-y-2">
           <p className="text-xs text-text-secondary">Ubuntu 24.04 amd64 with a compatible agent only. The target must have signed content staged locally. Select its agent-published plan, or import a public plan for controlled offline transfer. Operator approval is always required.</p>
           <label className="block text-sm">Plan source
@@ -1529,7 +1544,7 @@ function DeployForm({
           {offlineContent && <OfflineContentReview content={offlineContent} />}
         </div>}
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={mode === 'airgapped' || postPatchRescan} disabled={mode === 'airgapped'} onChange={(e) => setPostPatchRescan(e.target.checked)} />
+          <input type="checkbox" checked={mode === 'airgapped' || postPatchRescan} disabled={mode === 'airgapped'||!!onlinePlan} onChange={(e) => setPostPatchRescan(e.target.checked)} />
           Refresh package inventory after patching
         </label>
         <div className="flex items-center gap-2">
@@ -1615,7 +1630,7 @@ function DeployForm({
         <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
-        <Button size="sm" onClick={submit} disabled={busy || selectedIds.size === 0}>
+        <Button size="sm" onClick={submit} disabled={busy || loadingNodes || !!loadError || selectedIds.size === 0 || (mode!=='airgapped'&&!onlinePlan&&nodes.some(n=>selectedIds.has(n.id)&&hasOnlinePlanner(n,planNow))) || (!!onlinePlan&&Date.parse(onlinePlan.review.expires_at)<=planNow)}>
           {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
           Deploy to {selectedIds.size} node{selectedIds.size === 1 ? '' : 's'}
         </Button>
@@ -1641,11 +1656,19 @@ function ApprovalQueue({
   onChanged: () => void;
 }): JSX.Element {
   const client = useApiClient();
+  const [approvalNow,setApprovalNow]=useState(Date.now);
+  useEffect(()=>{const timer=setInterval(()=>setApprovalNow(Date.now()),1000);return ()=>clearInterval(timer);},[]);
+  const approvalDeadline=(a:PatchApproval)=>Math.min(Date.parse(a.expires_at)||0,a.offline_content?.format===3?Date.parse(a.offline_content.review?.expires_at??'')||0:Infinity,a.online_plan?Date.parse(a.online_plan.review.expires_at)||0:Infinity);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionState, setActionState] = useState<Record<string, InlineActionState>>({});
   const [pendingDeny, setPendingDeny] = useState<PendingApprovalDeny | null>(null);
 
   const approve = async (a: PatchApproval) => {
+    try {
+      if (approvalDeadline(a)<=Date.now()) throw new Error('Approval or exact plan expired; prepare and request approval again.');
+      if (a.offline_content) requireCurrentOfflinePlan(a.offline_content);
+ if(a.online_plan)requireCurrentOnlinePlan(a.online_plan);
+    } catch(error) {toast.error((error as Error).message);return;}
     setBusy(a.id);
     try {
       await client.approvePatchApproval(a.id);
@@ -1732,7 +1755,8 @@ function ApprovalQueue({
         </thead>
         <tbody>
           {approvals.map((a) => {
-            const expired = a.expires_at && new Date(a.expires_at).getTime() < Date.now();
+            const deadline=approvalDeadline(a);
+            const expired=deadline<=approvalNow;
             const denyState = actionState[approvalActionKey(a)];
             return (
               <Fragment key={a.id}><tr className="border-t border-border align-top">
@@ -1748,7 +1772,7 @@ function ApprovalQueue({
                   {a.package_scope_available
                     ? <><div>{a.package_allowlist?.length ? a.package_allowlist.join(', ') : 'All eligible packages'}</div>
                         {!!a.package_denylist?.length && <div>Excluded: {a.package_denylist.join(', ')}</div>}
-                        {a.offline_content ? <div className="text-text-secondary">Exact signed local plan shown below.</div> : <div className="text-text-secondary">Required dependencies may also change.</div>}</>
+                        {a.online_plan?<div className="text-text-secondary">Exact acquired online plan shown below.</div>:a.offline_content ? <div className="text-text-secondary">Exact signed local plan shown below.</div> : <div className="text-text-secondary">Required dependencies may also change.</div>}</>
                     : <span className="text-text-secondary">Package scope unavailable</span>}
                 </td>
                 <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -1778,6 +1802,7 @@ function ApprovalQueue({
                   ) : null}
                 </td>
               </tr>
+              {a.online_plan&&<tr><td colSpan={7} className="px-3 pb-4"><OnlinePlanReview plan={a.online_plan}/></td></tr>}
               {a.offline_content && <tr><td colSpan={7} className="px-3 pb-4"><p className="mb-2 text-xs text-text-secondary">Plan source: {a.published_offline_plan_sha256 ? 'Agent-published plan' : 'Manual JSON import'}</p><OfflineContentReview content={a.offline_content} /></td></tr>}
               </Fragment>
             );

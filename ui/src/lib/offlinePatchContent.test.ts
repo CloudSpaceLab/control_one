@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentPublishedOfflinePlan, offlinePlanPreparation, parseOfflinePatchContent } from './offlinePatchContent';
+import { agentPublishedOfflinePlan, offlinePlanPreparation, parseOfflinePatchContent, requireCurrentOfflinePlan } from './offlinePatchContent';
 import type { NodeSummary } from './api';
 
 const fixture = () => ({format:2 as const,manifest_sha256:'a'.repeat(64),installed_status_sha256:'b'.repeat(64),keyring_sha256:'c'.repeat(64),suite:'noble-updates',component:'main',architecture:'amd64',requested:[{name:'liblzma5',version:'1.2.3'}],resolved:[{name:'liblzma5',version:'1.2.3'},{name:'zlib1g',version:'1.3'}]});
@@ -42,5 +42,30 @@ describe('offline content plan import',()=>{
     if (scenario==='invalid version') plan.requested=[{name:'liblzma5',version:'1;touch'}];
     const text=scenario==='oversized'?' '.repeat(131073):JSON.stringify(plan);
     expect(()=>parseOfflinePatchContent(text)).toThrow();
+  });
+});
+
+
+describe('time-bounded exact review',()=>{
+  const reviewed=()=>({...fixture(),format:3,review:{prepared_at:'2026-10-30T10:00:00Z',expires_at:'2026-10-30T11:00:00Z',reboot:'unknown',service_impact:'requires_operator_review',changes:[{name:'liblzma5',installed_version:'1',proposed_version:'1.2.3',role:'requested'},{name:'zlib1g',installed_version:'',proposed_version:'1.3',role:'dependency'}]}});
+  it('parses historical review but rejects expired or future use, including fresh heartbeat',()=>{
+    const p=parseOfflinePatchContent(JSON.stringify(reviewed()));
+    expect(()=>requireCurrentOfflinePlan(p,Date.parse('2026-10-30T10:59:59Z'))).not.toThrow();
+    expect(()=>requireCurrentOfflinePlan(p,Date.parse('2026-10-30T11:00:00Z'))).toThrow('expired');
+    expect(()=>requireCurrentOfflinePlan(p,Date.parse('2026-10-30T09:59:59Z'))).toThrow('not yet valid');
+    const now=Date.parse('2026-10-30T11:00:00Z');
+    const n={state:'active',labels:{'patch.offline_plans':{observed_at:new Date(now).toISOString(),report:{version:1,status:'ready',plans:[p]}}}} as unknown as NodeSummary;
+    expect(agentPublishedOfflinePlan(n,now)).toBeNull();
+  });
+  it.each(['role','version','missing','duration','extra','reboot','legacy'])('rejects malformed review: %s',scenario=>{
+    const p=reviewed();
+    if(scenario==='role')p.review.changes[1].role='requested';
+    if(scenario==='version')p.review.changes[0].proposed_version='9';
+    if(scenario==='missing')p.review.changes=[];
+    if(scenario==='duration')p.review.expires_at='2026-10-31T11:00:00Z';
+    if(scenario==='extra')Object.assign(p.review,{command:'shell'});
+    if(scenario==='reboot')p.review.reboot='safe';
+    if(scenario==='legacy')p.format=2;
+    expect(()=>parseOfflinePatchContent(JSON.stringify(p))).toThrow();
   });
 });

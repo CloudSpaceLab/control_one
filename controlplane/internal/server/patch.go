@@ -70,6 +70,8 @@ const (
 // uses just the IDs. Proxy mode adds ProxyURL (e.g. "http://10.0.0.5:3128").
 // Airgapped mode adds StagedRepoPath (e.g. "/var/cache/apt/staged").
 type patchJobPayload struct {
+	AutomationRunID            string                       `json:"automation_run_id,omitempty"`
+	OnlinePlan                 *patchsupport.OnlinePlan     `json:"online_plan,omitempty"`
 	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
 	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
 	Window                     *patchsupport.Window         `json:"patch_window,omitempty"`
@@ -117,6 +119,7 @@ func (s *Server) handlePatchDeployJob(_ context.Context, _ *storage.Job) error {
 // ── HTTP endpoints ────────────────────────────────────────────────────────
 
 type patchDeployRequest struct {
+	OnlinePlan                 *patchsupport.OnlinePlan     `json:"online_plan,omitempty"`
 	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
 	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
 	TenantID                   string                       `json:"tenant_id"`
@@ -147,6 +150,8 @@ type patchDeployResponse struct {
 }
 
 type patchPackagePolicy struct {
+	automationRunID            uuid.UUID
+	OnlinePlan                 *patchsupport.OnlinePlan     `json:"online_plan,omitempty"`
 	PublishedOfflinePlanSHA256 string                       `json:"published_offline_plan_sha256,omitempty"`
 	OfflineContent             *patchsupport.OfflineContent `json:"offline_content,omitempty"`
 	approvalID                 uuid.UUID
@@ -295,6 +300,7 @@ func (s *Server) handleCreatePatchDeployment(w http.ResponseWriter, r *http.Requ
 			"package_denylist":              policy.Denylist,
 			"post_patch_rescan":             policy.PostPatchRescan,
 			"offline_content":               policy.OfflineContent,
+			"online_plan":                   policy.OnlinePlan,
 			"published_offline_plan_sha256": policy.PublishedOfflinePlanSHA256,
 			"waves":                         plan.Waves,
 		},
@@ -489,11 +495,15 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 		return patchGateResult{Reason: "patch safety store unavailable"}
 	}
 	now := time.Now().UTC()
+	onlineRequiresApproval := false
 
 	// Gate 1 — opt-out label.
 	if nodeID != uuid.Nil {
 		if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil && node.Labels != nil {
 			posture := nodeIsolationPostureFromNode(*node, now)
+			if runtime, err := nodePatchRuntime(node, now); err == nil && runtime.OnlinePlanVersion == 1 && (mode == "direct" || mode == "proxy") {
+				onlineRequiresApproval = true
+			}
 			if posture.Active && posture.Mode == isolationModeAirgapped && mode != patchModeAirgapped {
 				return patchGateResult{Reason: "node is airgapped; use airgapped patch mode or clear the isolation timer"}
 			}
@@ -536,7 +546,7 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 	// operator approve endpoint then re-runs dispatchPatchModeToNode. When
 	// the tenant has opted out (PatchRequiresApproval=false) we keep the
 	// legacy immediate-dispatch path — the gate is a no-op.
-	if cfg.PatchRequiresApproval || mode == patchModeAirgapped {
+	if cfg.PatchRequiresApproval || mode == patchModeAirgapped || onlineRequiresApproval {
 		deployment, err := s.store.GetPatchDeployment(ctx, deploymentID)
 		if err != nil || deployment == nil || deployment.TenantID != tenantID {
 			return patchGateResult{Reason: "cannot snapshot patch approval policy"}
@@ -557,6 +567,13 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 		if err != nil {
 			return patchGateResult{Reason: err.Error()}
 		}
+		expiresAt := now.Add(patchApprovalTTL)
+		if policy.OnlinePlan != nil && policy.OnlinePlan.Review.ExpiresAt.Before(expiresAt) {
+			expiresAt = policy.OnlinePlan.Review.ExpiresAt
+		}
+		if policy.OfflineContent != nil && policy.OfflineContent.Review != nil && policy.OfflineContent.Review.ExpiresAt.Before(expiresAt) {
+			expiresAt = policy.OfflineContent.Review.ExpiresAt
+		}
 		approval, err := s.store.CreatePatchApproval(ctx, storage.CreatePatchApprovalParams{
 			PolicyHash:   policyHash,
 			TenantID:     tenantID,
@@ -565,7 +582,7 @@ func (s *Server) runPatchSafetyGates(ctx context.Context, tenantID, nodeID, depl
 			Mode:         mode,
 			ProxyID:      proxyID,
 			WindowID:     windowID,
-			ExpiresAt:    now.Add(patchApprovalTTL),
+			ExpiresAt:    expiresAt,
 		})
 		if err != nil {
 			s.logger.Warn("create patch approval",
@@ -626,6 +643,9 @@ func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID u
 	}
 	for _, policy := range policies {
 		if err := validatePublishedOfflinePlan(node, policy, now); err != nil {
+			return patchGateResult{Reason: err.Error()}
+		}
+		if err := s.validateOnlinePolicy(ctx, node, mode, policy, now); err != nil {
 			return patchGateResult{Reason: err.Error()}
 		}
 		if err := policy.OfflineContent.ValidateInstallation(mode, policy.Allowlist, policy.Denylist); err != nil {
@@ -691,7 +711,13 @@ func (s *Server) previewPatchSafetyGates(ctx context.Context, tenantID, nodeID u
 	if breaker != nil && breaker.AckedAt == nil {
 		return patchGateResult{Reason: fmt.Sprintf("circuit breaker tripped: %s", breaker.TrippedReason)}
 	}
-	if cfg.PatchRequiresApproval || mode == patchModeAirgapped {
+	onlineRequiresApproval := false
+	if node, err := s.store.GetNode(ctx, nodeID); err == nil && node != nil {
+		if runtime, err := nodePatchRuntime(node, now); err == nil && runtime.OnlinePlanVersion == 1 && (mode == "direct" || mode == "proxy") {
+			onlineRequiresApproval = true
+		}
+	}
+	if cfg.PatchRequiresApproval || mode == patchModeAirgapped || onlineRequiresApproval {
 		return patchGateResult{AwaitingApproval: true, Reason: "approval required"}
 	}
 	return patchGateResult{Allowed: true}
@@ -723,6 +749,9 @@ func (s *Server) patchApprovalPolicyHash(ctx context.Context, tenantID, nodeID u
 		return "", "", rerr
 	}
 	if err := validatePublishedOfflinePlan(node, policy, time.Now().UTC()); err != nil {
+		return "", "", err
+	}
+	if err := s.validateOnlinePolicy(ctx, node, mode, policy, time.Now().UTC()); err != nil {
 		return "", "", err
 	}
 	snapshot["patch_runtime"] = runtime
@@ -1161,11 +1190,19 @@ func headerModeForPatchMode(mode string) string {
 
 func patchPackagePolicyFromRequest(req patchDeployRequest) (patchPackagePolicy, error) {
 	policy := patchPackagePolicy{
+		OnlinePlan:                 req.OnlinePlan,
 		OfflineContent:             req.OfflineContent,
 		PublishedOfflinePlanSHA256: req.PublishedOfflinePlanSHA256,
 		Allowlist:                  normalizePatchPackageNames(req.PackageAllowlist),
 		Denylist:                   normalizePatchPackageNames(req.PackageDenylist),
 		PostPatchRescan:            req.PostPatchRescan,
+	}
+	if policy.OnlinePlan != nil {
+		if len(req.NodeIDs) != 1 || policy.OnlinePlan.NodeID != req.NodeIDs[0] || policy.OfflineContent != nil || (req.Mode != "auto" && req.Mode != policy.OnlinePlan.Mode) || policy.OnlinePlan.Validate(time.Now().UTC()) != nil || !onlineScopeMatches(policy.OnlinePlan, policy.Allowlist, policy.Denylist) {
+			return policy, errors.New("online plan must match one target, exact scope, mode and current expiry")
+		}
+		policy.Allowlist = append([]string(nil), policy.OnlinePlan.Requested...)
+		policy.PostPatchRescan = true
 	}
 	if policy.PublishedOfflinePlanSHA256 != "" && (req.Mode != "airgapped" || policy.OfflineContent == nil || policy.PublishedOfflinePlanSHA256 != policy.OfflineContent.ManifestSHA256) {
 		return policy, errors.New("published offline plan must match explicit airgapped content")
@@ -1318,6 +1355,18 @@ func effectivePatchWaveSize(totalNodes, canaryCount, requested int) int {
 func (s *Server) resolvePatchModeForNode(ctx context.Context, nodeID uuid.UUID, requestedMode string) (string, *uuid.UUID, *uuid.UUID) {
 	nodeMode := requestedMode
 	var proxyID, windowID *uuid.UUID
+	if nodeMode == patchModeDirect || nodeMode == patchModeProxy || nodeMode == patchModeAirgapped {
+		cfg, err := s.store.GetNodePatchConfig(ctx, nodeID)
+		if err != nil {
+			return "unavailable", nil, nil
+		}
+		if cfg != nil {
+			if nodeMode == patchModeProxy {
+				proxyID = cfg.ProxyID
+			}
+			windowID = cfg.WindowID
+		}
+	}
 	if nodeMode == "" || nodeMode == "auto" {
 		cfg, err := s.store.GetNodePatchConfig(ctx, nodeID)
 		if err != nil {
@@ -1378,6 +1427,15 @@ func patchPackagePolicyFromSummary(summary map[string]any) patchPackagePolicy {
 		Allowlist:                  stringSliceFromSummary(summary["package_allowlist"]),
 		Denylist:                   stringSliceFromSummary(summary["package_denylist"]),
 		PostPatchRescan:            boolFromSummary(summary["post_patch_rescan"]),
+	}
+	if raw, ok := summary["online_plan"]; ok && raw != nil {
+		body, err := json.Marshal(raw)
+		if err != nil || string(body) != "null" {
+			policy.OnlinePlan = &patchsupport.OnlinePlan{}
+			if err == nil {
+				_ = json.Unmarshal(body, policy.OnlinePlan)
+			}
+		}
 	}
 	if raw, ok := summary["offline_content"]; ok && raw != nil {
 		policy.OfflineContent = &patchsupport.OfflineContent{}
@@ -1570,6 +1628,16 @@ func (s *Server) dispatchPatchModeToNode(
 	windowID *uuid.UUID,
 	policy patchPackagePolicy,
 ) (*storage.NodePatchState, error) {
+	if policy.OnlinePlan != nil {
+		if policy.approvalID == uuid.Nil {
+			return nil, errors.New("exact online installation always requires explicit approval")
+		}
+		if _, ok := s.store.(interface {
+			DispatchPatchJob(context.Context, storage.DispatchPatchJobParams) (*storage.NodePatchState, error)
+		}); !ok {
+			return nil, errors.New("exact online installation requires transactional dispatch")
+		}
+	}
 	if mode == patchModeAirgapped {
 		if err := policy.OfflineContent.ValidateInstallation(mode, policy.Allowlist, policy.Denylist); err != nil {
 			return nil, err
@@ -1591,6 +1659,9 @@ func (s *Server) dispatchPatchModeToNode(
 		return nil, errors.New("cannot verify patch runtime target")
 	}
 	if err := validatePublishedOfflinePlan(node, policy, time.Now().UTC()); err != nil {
+		return nil, err
+	}
+	if err := s.validateOnlinePolicy(ctx, node, mode, policy, time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	runtime, rerr := nodePatchRuntime(node, time.Now().UTC())
@@ -1640,6 +1711,7 @@ func (s *Server) dispatchPatchModeToNode(
 
 	var jobType string
 	payload := patchJobPayload{
+		OnlinePlan:                 policy.OnlinePlan,
 		OfflineContent:             policy.OfflineContent,
 		PublishedOfflinePlanSHA256: policy.PublishedOfflinePlanSHA256,
 		Window:                     windowBounds,
@@ -1651,6 +1723,9 @@ func (s *Server) dispatchPatchModeToNode(
 		PackageAllowlist:           policy.Allowlist,
 		PackageDenylist:            policy.Denylist,
 		PostPatchRescan:            policy.PostPatchRescan,
+	}
+	if policy.automationRunID != uuid.Nil {
+		payload.AutomationRunID = policy.automationRunID.String()
 	}
 	switch mode {
 	case patchModeProxy:

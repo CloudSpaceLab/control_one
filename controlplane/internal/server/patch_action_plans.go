@@ -70,6 +70,13 @@ func patchNodeActionPlanParams(tenantID, deploymentID, patchStateID, nodeID uuid
 			"node_patch_state_id": patchStateID.String(),
 		},
 	}
+	if policy.OnlinePlan != nil {
+		params.Diff["online_plan"] = policy.OnlinePlan
+	}
+	if policy.automationRunID != uuid.Nil {
+		params.Diff["automation_run_id"] = policy.automationRunID.String()
+		params.RequiredApprovals["authority"] = "retained_automation_authorization"
+	}
 	if policy.PublishedOfflinePlanSHA256 != "" {
 		params.Diff["published_offline_plan_sha256"] = policy.PublishedOfflinePlanSHA256
 	}

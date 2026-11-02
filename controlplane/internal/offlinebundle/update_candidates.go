@@ -14,6 +14,7 @@ type CandidateFixBoundary struct {
 }
 
 type UpdateCandidateView struct {
+	Review                *UpdateReview                          `json:"review,omitempty"`
 	Name                  string                                 `json:"name"`
 	Arch                  string                                 `json:"arch"`
 	InstalledVersion      string                                 `json:"installed_version"`

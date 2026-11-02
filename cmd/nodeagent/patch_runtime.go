@@ -12,12 +12,16 @@ import (
 
 func detectedPatchRuntime() patchsupport.Runtime {
 	r := patchsupport.Runtime{OS: runtime.GOOS, CalendarWindowStartCheck: true}
+	if offlineAPTPlatform() {
+		r.OnlinePlanVersion = 1
+	}
 	if managedProxyAvailable() {
 		r.ProxyLifecycleVersion = 2
 	}
 	if patchOfflineRoot != "" && offlineAPTPlatform() && offlineapt.CheckExecutionIsolation() == nil {
 		r.OfflineAPTVersion = 1
 		r.OfflinePrepareVersion = 1
+		r.OfflinePlanFormat = 3
 	}
 	if runtime.GOOS == "linux" {
 		for _, entry := range []struct{ binary, manager string }{{"apt-get", "apt"}, {"dnf", "dnf"}, {"yum", "yum"}} {

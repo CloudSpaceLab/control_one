@@ -46,6 +46,7 @@ const (
 // Everything is optional — the essential signal is that the agent called us,
 // using a client cert whose CN matches the node id.
 type heartbeatRequest struct {
+	PublishedOnlinePlan   *patchsupport.OnlinePlanReport    `json:"published_online_plan,omitempty"`
 	PublishedOfflinePlans *patchsupport.PublishedPlanReport `json:"published_offline_plans,omitempty"`
 	PatchRuntime          *patchsupport.Runtime             `json:"patch_runtime,omitempty"`
 	AgentVersion          string                            `json:"agent_version"`
@@ -277,6 +278,9 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	} else {
 		node = updated
 	}
+	if updated, err := s.updateOnlinePlanReport(r.Context(), node, body.PublishedOnlinePlan); err == nil {
+		node = updated
+	}
 	if len(body.Capabilities) > 0 {
 		if updated, uerr := s.updateNodeAgentCapabilities(r.Context(), node, body.Capabilities); uerr != nil {
 			s.logger.Warn("update agent capabilities", zap.Error(uerr))
@@ -379,6 +383,7 @@ func (s *Server) handleNodeHeartbeat(w http.ResponseWriter, r *http.Request, nod
 	}
 	// Check for queued self-update and signal the agent.
 	resp.PendingActions = append(resp.PendingActions, s.offlinePreparationActions(r.Context(), node)...)
+	resp.PendingActions = append(resp.PendingActions, s.onlinePreparationActions(r.Context(), node)...)
 	resp.PendingActions = append(resp.PendingActions, s.proxyLifecycleActions(r.Context(), node)...)
 	if pendingJob, jerr := s.store.GetPendingAgentUpdateJob(r.Context(), nodeID); jerr == nil && pendingJob != nil {
 		// A node-scoped update is an explicit operator request, so it must not
@@ -917,6 +922,8 @@ func (s *Server) processHeartbeatCompletedActions(ctx context.Context, reporting
 		switch c.Action {
 		case "squid.install", "squid.reconfigure", "squid.remove":
 			s.completeProxyLifecycle(ctx, reportingNodeID, c)
+		case patchsupport.PrepareOnlineJob:
+			s.completeOnlinePreparation(ctx, reportingNodeID, c)
 		case patchsupport.PrepareOfflineJob:
 			s.completeOfflinePreparation(ctx, reportingNodeID, c)
 		case JobTypeAgentUpdate:
@@ -1133,7 +1140,7 @@ func (s *Server) persistedPatchCompletionAcknowledgments(ctx context.Context, no
 			}
 			continue
 		}
-		if c.Action == patchsupport.PrepareOfflineJob {
+		if c.Action == patchsupport.PrepareOfflineJob || c.Action == patchsupport.PrepareOnlineJob {
 			id, err := uuid.Parse(c.JobID)
 			if err != nil {
 				continue
@@ -1141,10 +1148,14 @@ func (s *Server) persistedPatchCompletionAcknowledgments(ctx context.Context, no
 			job, err := s.store.GetJob(ctx, id)
 			node, nerr := s.store.GetNode(ctx, nodeID)
 			var receipt struct {
-				Status string `json:"_offline_preparation_receipt"`
+				Status       string `json:"_offline_preparation_receipt"`
+				OnlineStatus string `json:"_online_preparation_receipt"`
 			}
 			if job != nil {
 				_ = json.Unmarshal(job.Payload, &receipt)
+			}
+			if c.Action == patchsupport.PrepareOnlineJob {
+				receipt.Status = receipt.OnlineStatus
 			}
 			if err == nil && nerr == nil && node != nil && job != nil && node.TenantID == job.TenantID && job.Type == c.Action && jobPayloadNodeID(job.Payload) == nodeID && (c.Status == "succeeded" || c.Status == "failed") && receipt.Status == c.Status {
 				acknowledged = append(acknowledged, c.JobID)

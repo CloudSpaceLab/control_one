@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/CloudSpaceLab/control_one/internal/patchsupport"
 )
@@ -97,7 +98,19 @@ func (s *Snapshot) Publish(ctx context.Context, base string) (patchsupport.Offli
 		return patchsupport.OfflineContent{}, err
 	}
 	s.manifest.Resolved = resolved
-	s.manifest.Format = 2
+	status, err := os.ReadFile("/var/lib/dpkg/status")
+	if err != nil {
+		return patchsupport.OfflineContent{}, err
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(status)) != s.manifest.InstalledStatusSHA256 {
+		return patchsupport.OfflineContent{}, fmt.Errorf("installed package state changed during review")
+	}
+	review, err := reviewResolvedPlan(status, s.manifest.Requested, resolved, s.manifest.Architecture, time.Now().UTC())
+	if err != nil {
+		return patchsupport.OfflineContent{}, err
+	}
+	s.manifest.Review = review
+	s.manifest.Format = 3
 	body, err := json.Marshal(s.manifest)
 	if err != nil {
 		return patchsupport.OfflineContent{}, err
@@ -182,7 +195,7 @@ func OpenApproved(base string, approved patchsupport.OfflineContent) (*Snapshot,
 	if err := approved.Validate("airgapped", allow, nil); err != nil {
 		return nil, err
 	}
-	if approved.Format != 2 {
+	if approved.Format != 2 && approved.Format != 3 {
 		return nil, fmt.Errorf("offline installation requires a resolved format-2 plan")
 	}
 	if err := protectedPath(base); err != nil {
@@ -304,6 +317,9 @@ func install(ctx context.Context, base string, approved patchsupport.OfflineCont
 	// materializing an archive cache entry. Allow that local acquisition during
 	// installation; the isolated method directory has no network transports.
 	// Missing or modified local artifacts still fail signed-index verification.
+	if err = approved.RequireCurrent(time.Now().UTC()); err != nil {
+		return nil, err
+	}
 	args = append([]string{"--reinstall", "--assume-yes", "--no-install-recommends", "--no-remove", "install"}, exactArgs(resolved)...)
 	out, err = session.run(ctx, "apt-get", args...)
 	if err != nil {

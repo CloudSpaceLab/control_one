@@ -59,6 +59,12 @@ func main() {
 	// `controlone-agent uninstall` and `controlone-agent verify-binary ...`.
 	if len(os.Args) >= 2 {
 		switch os.Args[1] {
+		case "verify-online-plan":
+			if err := runVerifyOnlinePlan(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
 		case "offline-stage":
 			if err := runOfflineStage(os.Args[2:], os.Stdout); err != nil {
 				fmt.Fprintf(os.Stderr, "offline-stage failed: %v\n", err)
@@ -138,6 +144,10 @@ func main() {
 		log.Fatal("cannot initialize durable patch execution journal", zap.Error(err))
 	}
 	patchOfflineRoot = offlineStagingRoot
+	patchOnlineConfigPath, err = filepath.Abs(*cfgPath)
+	if err != nil {
+		log.Fatal("cannot resolve existing agent configuration", zap.Error(err))
+	}
 
 	runtimeSettings := agentruntime.Resolve(cfg.AgentRuntime.Profile)
 	log.Info("agent runtime profile selected",

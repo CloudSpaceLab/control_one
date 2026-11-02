@@ -42,6 +42,12 @@ func (s *Server) updatePatchRuntime(ctx context.Context, node *storage.Node, rep
 }
 
 func validateRuntimePackageScope(r patchsupport.Runtime, policy patchPackagePolicy) error {
+	if policy.OnlinePlan != nil && r.OnlinePlanVersion != 1 {
+		return fmt.Errorf("current exact online planning agent required")
+	}
+	if policy.OfflineContent != nil && policy.OfflineContent.Format == 3 && r.OfflinePlanFormat < 3 {
+		return fmt.Errorf("agent does not support time-bounded format-3 plans; update it and wait for a current heartbeat")
+	}
 	if r.OS == "windows" && (len(policy.Allowlist) > 0 || len(policy.Denylist) > 0) {
 		return fmt.Errorf("Windows package-scoped patching is unavailable; winget allowlists/exclusions are not implemented")
 	}

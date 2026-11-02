@@ -1,3 +1,5 @@
+import type {PatchReviewResponse,PatchReviewPolicy,PatchReviewPolicyRecord,PatchPriorityInput,PatchPriorityDecision,PatchFindingTracking} from '@/features/patch-management/reviewTypes';
+import type {PatchOperationsResponse,PatchReviewOperationsPolicy,PatchRetentionPreview} from '@/features/patch-management/operationsTypes';
 // Use the same-origin Vite /api proxy in local development as well as in
 // production.  Direct browser calls to localhost:8443 from a 127.0.0.1:4173
 // page trigger CORS preflights before login and surface as "Failed to fetch".
@@ -2451,7 +2453,7 @@ export interface Notification {
   recipient_id: string;
   actor_id?: string;
   actor_name?: string;
-  kind: 'case_assigned' | 'case_mentioned';
+  kind: 'case_assigned' | 'case_mentioned' | 'patch_review_escalation';
   case_id: string;
   case_title: string;
   read_at?: string;
@@ -2583,6 +2585,7 @@ export interface PatchHealthEvidence {
 }
 
 export interface UpdateCandidate {
+  review?: {state: string; summary: string; evaluated_at: string; evidence_valid_until?: string; findings_addressed: string[]; dependencies: string; reboot: string; health: string; urgency: string; required_steps: string[]};
   name: string; arch: string; installed_version: string; inventory_generation: string;
   coverage: string; security_fix_applicable: boolean; repository_verified: boolean; version_relation: string; reason: string;
   fix_boundaries: Array<{ cve_id: string; severity: string; fixed_version: string; advisory_url: string; currently_affected?: boolean }>;
@@ -2688,6 +2691,8 @@ export interface DownloadedFile {
   blob: Blob;
   filename?: string;
   contentType?: string;
+  archiveId?: string;
+  sha256?: string;
 }
 
 export class APIError extends Error {
@@ -4947,6 +4952,30 @@ export class APIClient {
     );
   }
 
+  async getPatchReviews(tenantId:string,exportEvidence=false,page?:{cursor?:string;historyCursor?:number;limit?:number}):Promise<PatchReviewResponse>{
+    const query=new URLSearchParams({tenant_id:tenantId});if(exportEvidence)query.set('action','export');if(page?.cursor)query.set('cursor',page.cursor);if(page?.historyCursor)query.set('history_cursor',String(page.historyCursor));if(page?.limit)query.set('limit',String(page.limit));
+    return this.request(`/api/v1/patch/reviews?${query}`);
+  }
+  async downloadPatchReviewEvidence(tenantId:string):Promise<DownloadedFile>{return this.download(`/api/v1/patch/reviews?tenant_id=${encodeURIComponent(tenantId)}&action=export`);}
+  async getPatchReviewOperations(tenantId:string):Promise<PatchOperationsResponse>{return this.request(`/api/v1/patch/review-operations?tenant_id=${encodeURIComponent(tenantId)}`);}
+	async getPatchAutomationRuns(tenantId:string):Promise<{runs:import('@/features/patch-management/operationsTypes').PatchAutomationRun[];limit:number}>{return this.request(`/api/v1/patch/automation-runs?tenant_id=${encodeURIComponent(tenantId)}`);}
+	async checkPatchAutomationReadiness(tenantId:string,nodeId:string):Promise<{ready:boolean;reason:string;installation_authorized:false}>{return this.request(`/api/v1/patch/automation-runs?tenant_id=${encodeURIComponent(tenantId)}&action=readiness`,{method:'POST',body:JSON.stringify({node_id:nodeId})});}
+	async schedulePatchAutomation(tenantId:string,approvalId:string,revision:number,notBefore:string):Promise<import('@/features/patch-management/operationsTypes').PatchAutomationRun>{return this.request(`/api/v1/patch/automation-runs?tenant_id=${encodeURIComponent(tenantId)}&action=schedule`,{method:'POST',body:JSON.stringify({approval_id:approvalId,revision,not_before:notBefore})});}
+	async cancelPatchAutomation(tenantId:string,runId:string):Promise<{cancelled:boolean}>{return this.request(`/api/v1/patch/automation-runs?tenant_id=${encodeURIComponent(tenantId)}&action=cancel`,{method:'POST',body:JSON.stringify({run_id:runId})});}
+  async savePatchReviewOperations(tenantId:string,expectedRevision:number,policy:PatchReviewOperationsPolicy):Promise<PatchOperationsResponse['operations']>{return this.request(`/api/v1/patch/review-operations?tenant_id=${encodeURIComponent(tenantId)}`,{method:'PUT',body:JSON.stringify({expected_revision:expectedRevision,policy})});}
+  async previewPatchReviewRetention(tenantId:string):Promise<PatchRetentionPreview>{return this.request(`/api/v1/patch/review-operations?tenant_id=${encodeURIComponent(tenantId)}&action=retention_preview`,{method:'POST',body:'{}'});}
+  async purgePatchReviewRetention(tenantId:string,preview:PatchRetentionPreview,archiveId:string,destination:string):Promise<{deleted:number}>{return this.request(`/api/v1/patch/review-operations?tenant_id=${encodeURIComponent(tenantId)}&action=retention_purge`,{method:'POST',body:JSON.stringify({revision:preview.revision,cutoff:preview.cutoff,sha256:preview.sha256,archive_id:archiveId,archive_destination:destination,verified_archive:true})});}
+  async checkPatchReviewEscalations(tenantId:string):Promise<{delivered:number;channel:string}>{return this.request(`/api/v1/patch/review-operations?tenant_id=${encodeURIComponent(tenantId)}&action=escalation_check`,{method:'POST',body:'{}'});}
+  async savePatchReviewPolicy(tenantId:string,expectedRevision:number,policy:PatchReviewPolicy):Promise<PatchReviewPolicyRecord>{
+    return this.request(`/api/v1/patch/reviews?tenant_id=${encodeURIComponent(tenantId)}`,{method:'PUT',body:JSON.stringify({expected_revision:expectedRevision,policy})});
+  }
+  async simulatePatchPriority(tenantId:string,input:PatchPriorityInput):Promise<{simulation:true;decision:PatchPriorityDecision}>{
+    return this.request(`/api/v1/patch/reviews?tenant_id=${encodeURIComponent(tenantId)}&action=simulate`,{method:'POST',body:JSON.stringify(input)});
+  }
+  async savePatchFindingReview(tenantId:string,findingId:string,expectedRevision:number,tracking:PatchFindingTracking):Promise<unknown>{
+    return this.request(`/api/v1/patch/reviews?tenant_id=${encodeURIComponent(tenantId)}&action=tracking`,{method:'POST',body:JSON.stringify({finding_id:findingId,expected_revision:expectedRevision,tracking})});
+  }
+
   async listPatchDeployments(params: {
     tenantId: string;
     limit?: number;
@@ -4964,6 +4993,7 @@ export class APIClient {
   }
 
   async createPatchDeployment(payload: {
+ online_plan?:ExactOnlinePlan;
 	 published_offline_plan_sha256?: string;
 	 offline_content?: OfflinePatchContent;
     tenant_id: string;
@@ -5047,7 +5077,13 @@ export class APIClient {
     return this.request('/api/v1/patch/offline/repository', {method: 'PUT', body: JSON.stringify({node_id: nodeId, repository})});
   }
 
-  async prepareOfflinePlan(nodeId: string, repositoryId: string, packages: {name: string; version: string}[]): Promise<OfflinePreparationStatus> {
+  async prepareOnlinePlan(nodeId:string,mode:'direct'|'proxy',packages:string[]):Promise<OfflinePreparationStatus>{
+ return this.request('/api/v1/patch/online/prepare',{method:'POST',body:JSON.stringify({node_id:nodeId,mode,packages})});
+ }
+ async getOnlinePreparation(nodeId:string,jobId?:string):Promise<OfflinePreparationStatus>{
+ return this.request('/api/v1/patch/online/prepare?node_id='+encodeURIComponent(nodeId)+(jobId?'&job_id='+encodeURIComponent(jobId):''));
+ }
+ async prepareOfflinePlan(nodeId: string, repositoryId: string, packages: {name: string; version: string}[]): Promise<OfflinePreparationStatus> {
     return this.request('/api/v1/patch/offline/prepare', {method: 'POST', body: JSON.stringify({node_id: nodeId, repository_id: repositoryId, packages})});
   }
 
@@ -5739,6 +5775,8 @@ export class APIClient {
         response.headers.get("Content-Disposition"),
       ),
       contentType: response.headers.get("Content-Type") ?? undefined,
+      archiveId: response.headers.get('X-Patch-Archive-ID')??undefined,
+      sha256: response.headers.get('X-Content-SHA256')??undefined,
     };
   }
 
@@ -7472,6 +7510,7 @@ export interface PatchDeployResponse {
 
 // PatchApproval mirrors patchApprovalResponse on the server.
 export interface PatchApproval {
+ online_plan?:ExactOnlinePlan;
 	 published_offline_plan_sha256?: string;
 	 offline_content?: OfflinePatchContent;
   package_scope_available?: boolean;
@@ -7492,8 +7531,20 @@ export interface PatchApproval {
   job_id?: string;
 }
 
+export interface ExactOnlinePlan {
+ version:1; sha256:string; node_id:string; mode:'direct'|'proxy'; repository_hosts?:string[]; proxy_url?:string; transport_context:string;
+ installed_state_sha256:string; inputs_sha256:string; manifest_sha256:string; artifacts_sha256?:string; requested:string[];
+ resolved:{name:string;version:string}[];
+ review:{prepared_at:string;expires_at:string;changes:{name:string;installed_version:string;proposed_version:string;role:'requested'|'dependency'}[];reboot:'unknown';service_impact:'requires_operator_review'};
+}
+
 export interface OfflinePatchContent {
-  format: 2;
+  format: 2 | 3;
+  review?: {
+    prepared_at: string; expires_at: string;
+    changes: {name:string; installed_version:string; proposed_version:string; role:'requested'|'dependency'}[];
+    reboot: 'unknown'; service_impact: 'requires_operator_review';
+  };
   manifest_sha256: string;
   installed_status_sha256: string;
   keyring_sha256: string;
