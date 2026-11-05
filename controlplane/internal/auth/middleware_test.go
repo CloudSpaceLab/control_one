@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -166,17 +167,22 @@ func TestMiddlewarePrefersBearerSessionOverForwardedClientCertificate(t *testing
 }
 
 type fakeIdentityStore struct {
-	userID           uuid.UUID
-	ensureUserCalled bool
-	assignedRoles    []string
-	rolesReturn      []string
-	sessionToken     string
-	session          *storage.Session
-	sessionUser      *storage.LocalUser
+	ensureErr, assignErr, listErr error
+	emptyRoles                    bool
+	userID                        uuid.UUID
+	ensureUserCalled              bool
+	assignedRoles                 []string
+	rolesReturn                   []string
+	sessionToken                  string
+	session                       *storage.Session
+	sessionUser                   *storage.LocalUser
 }
 
 func (f *fakeIdentityStore) EnsureUser(_ context.Context, externalID, email, displayName string) (*storage.User, error) {
 	f.ensureUserCalled = true
+	if f.ensureErr != nil {
+		return nil, f.ensureErr
+	}
 	if f.userID == uuid.Nil {
 		f.userID = uuid.New()
 	}
@@ -184,6 +190,9 @@ func (f *fakeIdentityStore) EnsureUser(_ context.Context, externalID, email, dis
 }
 
 func (f *fakeIdentityStore) AssignRolesToUser(_ context.Context, userID uuid.UUID, roles []string) error {
+	if f.assignErr != nil {
+		return f.assignErr
+	}
 	f.assignedRoles = append([]string{}, roles...)
 	if f.userID == uuid.Nil {
 		f.userID = userID
@@ -192,8 +201,14 @@ func (f *fakeIdentityStore) AssignRolesToUser(_ context.Context, userID uuid.UUI
 }
 
 func (f *fakeIdentityStore) ListUserRoles(_ context.Context, userID uuid.UUID) ([]string, error) {
-	if len(f.rolesReturn) == 0 {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if f.emptyRoles {
 		return nil, nil
+	}
+	if len(f.rolesReturn) == 0 {
+		return append([]string{}, f.assignedRoles...), nil
 	}
 	return append([]string{}, f.rolesReturn...), nil
 }
@@ -317,4 +332,98 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestLDAPSessionVerifierRejectsMissingOrFailedDirectoryEvidence(t *testing.T) {
+	store := &fakeIdentityStore{sessionToken: "fixture-session", session: &storage.Session{}, sessionUser: &storage.LocalUser{ID: uuid.New(), Email: "reviewer@phase4.invalid", AuthProvider: storage.AuthProviderLDAP}, rolesReturn: []string{"ciso"}}
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+	req.Header.Set("Authorization", "Bearer fixture-session")
+	_, err := mw.authenticate(req)
+	if err == nil {
+		t.Fatal("missing LDAP verifier must deny")
+	}
+	mw.SetLDAPSessionVerifier(func(context.Context, *storage.LocalUser) ([]string, error) {
+		return nil, errors.New("directory unavailable")
+	})
+	_, err = mw.authenticate(req)
+	if err == nil {
+		t.Fatal("failed directory verification must deny")
+	}
+	recorder := httptest.NewRecorder()
+	mw.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("directory failure reached protected handler") })).ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusUnauthorized || recorder.Header().Get("X-ControlOne-Auth-Reason") != "directory_verification_required" {
+		t.Fatalf("unexpected response: %d %q", recorder.Code, recorder.Header().Get("X-ControlOne-Auth-Reason"))
+	}
+
+	mw.SetLDAPSessionVerifier(func(context.Context, *storage.LocalUser) ([]string, error) { return []string{"viewer"}, nil })
+	p, err := mw.authenticate(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalSlices(p.Roles, []string{"viewer"}) {
+		t.Fatalf("must use verified roles, got %v", p.Roles)
+	}
+}
+
+func TestProvisioningPersistenceFailsClosed(t *testing.T) {
+	for _, stage := range []string{"identity", "assignment", "readback", "empty"} {
+		t.Run(stage, func(t *testing.T) {
+			store := &fakeIdentityStore{}
+			fault := errors.New("isolated persistence failure")
+			switch stage {
+			case "identity":
+				store.ensureErr = fault
+			case "assignment":
+				store.assignErr = fault
+			case "readback":
+				store.listErr = fault
+			case "empty":
+				store.emptyRoles = true
+			}
+			mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, store)
+			p, err := mw.persistPrincipal(context.Background(), &Principal{Subject: "fixture", Roles: []string{"admin"}})
+			if stage == "empty" {
+				if err != nil || len(p.Roles) != 0 {
+					t.Fatalf("empty effective grants retained authority: %v %v", p, err)
+				}
+				return
+			}
+			if !errors.Is(err, fault) || p != nil {
+				t.Fatalf("persistence failure must deny principal: %v %v", p, err)
+			}
+		})
+	}
+}
+
+func (f *fakeIdentityStore) PersistAuthenticationRoles(ctx context.Context, authority, subject, email, name string, roles []string) (*storage.User, []string, error) {
+	u, err := f.EnsureUser(ctx, subject, email, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = f.AssignRolesToUser(ctx, u.ID, roles); err != nil {
+		return nil, nil, err
+	}
+	effective, err := f.ListUserRoles(ctx, u.ID)
+	return u, effective, err
+}
+
+func TestStaticTokenIdentityDoesNotExposeCredential(t *testing.T) {
+	const secret = "isolated-token-not-for-production"
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{OIDC: config.OIDCConfig{StaticTokens: map[string]config.StaticPrincipalConfig{secret: {Roles: []string{"viewer"}}}}}, &fakeIdentityStore{})
+	p, ok := mw.staticPrincipal(secret)
+	if !ok || p.Subject == secret || p.Name == secret {
+		t.Fatal("token leaked into principal identity")
+	}
+}
+
+func TestProvisioningRequiresPersistenceAndSubject(t *testing.T) {
+	mw := NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, nil)
+	if p, err := mw.persistPrincipal(context.Background(), &Principal{Subject: "fixture", Roles: []string{"admin"}}); err == nil || p != nil {
+		t.Fatal("missing persistence accepted claimed authority")
+	}
+	mw = NewMiddleware(zap.NewNop(), false, config.AuthConfig{}, &fakeIdentityStore{})
+	if p, err := mw.persistPrincipal(context.Background(), &Principal{Roles: []string{"admin"}}); err == nil || p != nil {
+		t.Fatal("empty subject accepted claimed authority")
+	}
 }

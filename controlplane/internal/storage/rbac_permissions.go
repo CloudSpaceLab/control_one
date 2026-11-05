@@ -171,7 +171,9 @@ func (s *Store) GetUserPermissions(ctx context.Context, userID uuid.UUID) ([]str
 SELECT DISTINCT rp.permission_name
 FROM user_roles ur
 JOIN role_permissions rp ON rp.role_id = ur.role_id
-WHERE ur.user_id = $1`, userID)
+JOIN users u ON u.id=ur.user_id
+WHERE ur.user_id = $1 AND u.disabled_at IS NULL
+ AND (ur.expires_at IS NULL OR ur.expires_at>NOW())`, userID)
 	if err != nil {
 		return nil, err
 	}

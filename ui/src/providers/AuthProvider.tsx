@@ -10,6 +10,7 @@ import {
 import { APIClient, APIError, type Profile } from '../lib/api';
 
 const STORAGE_KEY = 'control-one-token';
+const DIRECTORY_SESSION_NOTICE = 'Directory access changed or could not be verified. Sign in again or contact your administrator.';
 const PROFILE_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 function readStoredToken(): string | null {
@@ -29,7 +30,7 @@ interface AuthContextValue {
   apiClient: APIClient;
   signIn: (token: string) => Promise<void>;
   signOut: () => Promise<void>;
-  refreshProfile: () => Promise<void>;
+  refreshProfile: (options?: { background?: boolean }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -68,17 +69,17 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   }, [apiClient]);
 
   useEffect(() => {
-    apiClient.onUnauthorized(() => handleSessionEnded());
+    apiClient.onUnauthorized(reason => handleSessionEnded(reason === 'directory_verification_required' ? DIRECTORY_SESSION_NOTICE : undefined));
     return () => apiClient.onUnauthorized(undefined);
   }, [apiClient, handleSessionEnded]);
 
-  const refreshProfile = useCallback(async (): Promise<void> => {
+  const refreshProfile = useCallback(async (options?: { background?: boolean }): Promise<void> => {
     if (!token) {
       setProfile(null);
       setError(null);
       return;
     }
-    setLoading(true);
+    if (!options?.background) setLoading(true);
     setError(null);
     try {
       const data = await apiClient.getProfile();
@@ -86,14 +87,14 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       setError(null);
     } catch (err) {
       if (err instanceof APIError && err.status === 401) {
-        handleSessionEnded();
+        handleSessionEnded(err.authReason === 'directory_verification_required' ? DIRECTORY_SESSION_NOTICE : undefined);
         return;
       }
       const message = err instanceof Error ? err.message : 'Failed to load profile';
       setError(message);
       setProfile(null);
     } finally {
-      setLoading(false);
+      if (!options?.background) setLoading(false);
     }
   }, [apiClient, token, handleSessionEnded]);
 

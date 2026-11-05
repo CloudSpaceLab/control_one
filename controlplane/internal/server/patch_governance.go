@@ -97,7 +97,7 @@ func (s *Server) downloadPatchReviewExport(w http.ResponseWriter, r *http.Reques
 // Reviews are read-only recommendations. Saving an exception never suppresses
 // a finding, bypasses a safety gate or authorizes a package job.
 func (s *Server) handlePatchGovernance(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -110,7 +110,7 @@ func (s *Server) handlePatchGovernance(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tenant_id must be UUID", 400)
 		return
 	}
-	roles := []string{roleViewer, roleOperator, roleAdmin}
+	roles := []string{roleViewer, roleOperator, roleCISO, roleAdmin}
 	if r.Method == http.MethodPut {
 		roles = []string{roleAdmin}
 	}

@@ -24,7 +24,7 @@ func (s *Server) handlePermissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 		return
 	}
 	perms, err := s.store.ListPermissions(r.Context())
@@ -42,7 +42,7 @@ func (s *Server) handleRolesWithPermissions(w http.ResponseWriter, r *http.Reque
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 		return
 	}
 	roles, err := s.store.ListRolesWithPermissions(r.Context())
@@ -70,7 +70,7 @@ func (s *Server) handleRoleSubroutes(w http.ResponseWriter, r *http.Request) {
 
 	// POST /api/v1/roles/  → create custom role
 	if (len(parts) == 0 || parts[0] == "") && r.Method == http.MethodPost {
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 			return
 		}
 		var body roleCreateRequest
@@ -104,7 +104,7 @@ func (s *Server) handleRoleSubroutes(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 			return
 		}
 		var body rolePermsRequest
@@ -123,7 +123,7 @@ func (s *Server) handleRoleSubroutes(w http.ResponseWriter, r *http.Request) {
 
 	// /api/v1/roles/{id}  DELETE
 	if r.Method == http.MethodDelete {
-		if _, ok := s.authorize(w, r, roleAdmin); !ok {
+		if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 			return
 		}
 		if err := s.store.DeleteRoleByID(r.Context(), roleID); err != nil {

@@ -146,9 +146,9 @@ func (s *Server) recordAudit(ctx context.Context, principal *auth.Principal, ten
 			entry.ActorType = principal.Type
 			if strings.TrimSpace(principal.Subject) != "" {
 				entry.ActorType = "user"
-				if user, err := s.store.GetUserByExternalID(ctx, principal.Subject); err == nil && user != nil {
-					entry.ActorID = user.ID
-				}
+				// Local sessions identify the persisted user by UUID; external
+				// identity providers may use an external subject instead.
+				entry.ActorID = principalStorageUserID(s, ctx, principal)
 			}
 		}
 		if _, err := s.store.CreateAuditLog(ctx, entry); err != nil {

@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => {
     toastError,
     toastWarning,
     currentTenantId: 'tenant-1' as string | null,
+    roles: ['admin'] as string[],
     tenantList: [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }],
     setCurrentTenantId: vi.fn(),
     apiClient: {
@@ -63,6 +64,10 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('../hooks/useApiClient', () => ({
   useApiClient: () => mocks.apiClient,
+}));
+
+vi.mock('../providers/AuthProvider', () => ({
+  useAuth: () => ({ profile: { roles: mocks.roles } }),
 }));
 
 vi.mock('../providers/TenantProvider', () => ({
@@ -261,6 +266,7 @@ describe('PatchManagement', () => {
   });
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.roles = ['admin'];
     mocks.currentTenantId = 'tenant-1';
     mocks.tenantList = [{ id: 'tenant-1', name: 'Bank A', created_at: '2026-01-01T00:00:00Z' }];
     mocks.getPatchSummary.mockResolvedValue({
@@ -304,6 +310,16 @@ describe('PatchManagement', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('lets a CISO review posture without fetching installation approvals or offering deployment', async () => {
+    mocks.roles = ['ciso'];
+    render(<PatchManagement />);
+    await waitFor(() => expect(mocks.getPatchSummary).toHaveBeenCalledWith('tenant-1'));
+    expect(mocks.listPatchApprovals).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', {name: 'Review policy & ownership'})).toBeVisible();
+    expect(screen.queryByRole('button', {name: /Deploy patches/})).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: /Approvals \(/})).not.toBeInTheDocument();
   });
 
   it.each(['partial', 'expired', 'unavailable'] as const)('shows %s assessment without treating zero findings as clean', async (status) => {

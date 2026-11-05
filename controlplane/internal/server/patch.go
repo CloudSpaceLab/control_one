@@ -783,7 +783,7 @@ func (s *Server) patchApprovalPolicyHash(ctx context.Context, tenantID, nodeID u
 }
 
 func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -796,7 +796,7 @@ func (s *Server) handleListPatchDeployments(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin) {
 		return
 	}
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 50)
@@ -822,7 +822,7 @@ func (s *Server) handlePatchSummary(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -838,13 +838,13 @@ func (s *Server) handlePatchSummary(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid tenant_id", http.StatusBadRequest)
 			return
 		}
-		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+		if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin) {
 			return
 		}
 		tenantIDs = []uuid.UUID{tenantID}
 	} else {
 		var err error
-		tenantIDs, err = s.accessibleTenantIDs(r.Context(), principal, roleViewer, roleOperator, roleAdmin)
+		tenantIDs, err = s.accessibleTenantIDs(r.Context(), principal, roleViewer, roleOperator, roleCISO, roleAdmin)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
@@ -910,7 +910,7 @@ func (s *Server) handleListPatchDeploymentNodes(w http.ResponseWriter, r *http.R
 		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		return
 	}
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -923,7 +923,7 @@ func (s *Server) handleListPatchDeploymentNodes(w http.ResponseWriter, r *http.R
 		http.NotFound(w, r)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, deployment.TenantID, roleViewer, roleOperator, roleAdmin) {
+	if !s.requireTenantAccess(w, r, principal, deployment.TenantID, roleViewer, roleOperator, roleCISO, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListNodePatchStatesForDeployment(r.Context(), deploymentID)
@@ -1914,7 +1914,7 @@ func (s *Server) handlePatchConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetPatchConfig(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -1936,7 +1936,7 @@ func (s *Server) handleGetPatchConfig(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleViewer, roleOperator, roleAdmin) {
+	if !s.requireTenantAccess(w, r, principal, node.TenantID, roleViewer, roleOperator, roleCISO, roleAdmin) {
 		return
 	}
 	cfg, err := s.store.GetNodePatchConfig(r.Context(), nodeID)
@@ -2068,7 +2068,7 @@ func (s *Server) handleMaintenanceWindowsCollection(w http.ResponseWriter, r *ht
 }
 
 func (s *Server) handleListMaintenanceWindows(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -2081,7 +2081,7 @@ func (s *Server) handleListMaintenanceWindows(w http.ResponseWriter, r *http.Req
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListMaintenanceWindows(r.Context(), tenantID)
@@ -2300,7 +2300,7 @@ func (s *Server) handleSquidProxiesCollection(w http.ResponseWriter, r *http.Req
 }
 
 func (s *Server) handleListSquidProxies(w http.ResponseWriter, r *http.Request) {
-	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleAdmin)
+	principal, ok := s.authorize(w, r, roleViewer, roleOperator, roleCISO, roleAdmin)
 	if !ok {
 		return
 	}
@@ -2313,7 +2313,7 @@ func (s *Server) handleListSquidProxies(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "tenant_id must be a UUID", http.StatusBadRequest)
 		return
 	}
-	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleAdmin) {
+	if !s.requireTenantAccess(w, r, principal, tenantID, roleViewer, roleOperator, roleCISO, roleAdmin) {
 		return
 	}
 	rows, err := s.store.ListSquidProxies(r.Context(), tenantID)

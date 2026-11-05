@@ -2,6 +2,7 @@ import { oidcConfig } from '../config/oidc';
 import { generateCodeChallenge, generateCodeVerifier, generateRandomState } from '../utils/pkce';
 
 const PKCE_SESSION_KEY = 'control-one-oidc';
+const PKCE_SESSION_LIFETIME_MS = 10 * 60 * 1000;
 
 interface PKCESession {
   state: string;
@@ -92,6 +93,16 @@ export async function exchangeCodeForToken(code: string, state: string): Promise
   const session = readSession();
   clearOidcSession();
   if (!session) {
+    throw new Error('OIDC session not found or expired');
+  }
+  if (
+    !Number.isFinite(session.createdAt) ||
+    session.createdAt > Date.now() ||
+    Date.now() - session.createdAt >= PKCE_SESSION_LIFETIME_MS ||
+    typeof session.state !== 'string' || !session.state ||
+    typeof session.codeVerifier !== 'string' ||
+    !/^[A-Za-z0-9._~-]{43,128}$/.test(session.codeVerifier)
+  ) {
     throw new Error('OIDC session not found or expired');
   }
   if (session.state !== state) {

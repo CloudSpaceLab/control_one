@@ -366,6 +366,13 @@ func (s *Server) validateOnlineExecutionAuthorization(ctx context.Context, node 
 	if err != nil || job == nil || job.TenantID != node.TenantID || job.Type != "patch.deploy_"+mode || (job.Status != storage.JobStatusRunning && job.Status != storage.JobStatusQueued) || jobPayloadNodeID(job.Payload) != node.ID {
 		return fmt.Errorf("online execution job is not current for this node")
 	}
+	if organization, ok := s.store.(interface {
+		CheckPatchOrganizationExecution(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) error
+	}); ok {
+		if e := organization.CheckPatchOrganizationExecution(ctx, node.TenantID, node.ID, id); e != nil {
+			return e
+		}
+	}
 	var payload patchJobPayload
 	if json.Unmarshal(job.Payload, &payload) != nil || payload.Mode != mode || payload.OnlinePlan == nil || payload.OnlinePlan.SHA256 != planSHA || payload.NodeID != node.ID.String() || payload.ProxyURL != payload.OnlinePlan.ProxyURL {
 		return fmt.Errorf("online execution plan/job mismatch")

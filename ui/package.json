@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:sso-lab": "vite --mode sso-lab --host 127.0.0.1 --port 4177 --strictPort",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run --coverage",

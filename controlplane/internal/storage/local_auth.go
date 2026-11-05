@@ -42,6 +42,7 @@ type CreateLocalUserParams struct {
 	Password    string
 	Provider    string // "local" or "ldap"
 	Roles       []string
+	RoleSource  string // administrator by default; provisioning for bootstrap
 }
 
 // CreateLocalUser inserts a new operator record. Sets bcrypt(password) when
@@ -51,6 +52,9 @@ type CreateLocalUserParams struct {
 func (s *Store) CreateLocalUser(ctx context.Context, p CreateLocalUserParams) (*LocalUser, error) {
 	if s.db == nil {
 		return nil, errors.New("storage not initialized")
+	}
+	if p.RoleSource != "" && p.RoleSource != "administrator" && p.RoleSource != "provisioning" {
+		return nil, errors.New("unsupported role source")
 	}
 	email := strings.ToLower(strings.TrimSpace(p.Email))
 	if email == "" {
@@ -96,9 +100,13 @@ RETURNING id, COALESCE(email,''), COALESCE(display_name,''), auth_provider,
 		return nil, err
 	}
 
-	// Best-effort role assignment.
+	// Assign the explicitly selected source; report failures to the caller.
 	if len(p.Roles) > 0 {
-		if err := s.AssignRolesToUser(ctx, u.ID, p.Roles); err != nil {
+		source := p.RoleSource
+		if source == "" {
+			source = "administrator"
+		}
+		if err := s.assignAttributedRoles(ctx, u.ID, p.Roles, source); err != nil {
 			return &u, err
 		}
 	}

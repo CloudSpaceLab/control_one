@@ -83,8 +83,20 @@ func (s *Store) CreatePatchApproval(ctx context.Context, params CreatePatchAppro
 
 	id := uuid.New()
 	now := s.clock().UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err = lockAutomationTenant(ctx, tx, params.TenantID); err != nil {
+		return nil, err
+	}
+	organizationRevision, err := checkPatchOrganizationTx(ctx, tx, params.TenantID, nil)
+	if err != nil {
+		return nil, err
+	}
 
-	row := s.db.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		INSERT INTO patch_approvals (
 			id, tenant_id, deployment_id, node_id, mode, proxy_id, window_id,
 			status, created_at, expires_at, policy_hash
@@ -106,7 +118,19 @@ func (s *Store) CreatePatchApproval(ctx context.Context, params CreatePatchAppro
 		params.PolicyHash,
 	)
 
-	return scanPatchApproval(row)
+	approval, err := scanPatchApproval(row)
+	if err != nil {
+		return nil, err
+	}
+	if organizationRevision > 0 {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO patch_organization_approval_bindings(approval_id,tenant_id,organization_revision) VALUES($1,$2,$3)`, approval.ID, params.TenantID, organizationRevision); err != nil {
+			return nil, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return approval, nil
 }
 
 // GetPatchApproval fetches a single approval by ID.

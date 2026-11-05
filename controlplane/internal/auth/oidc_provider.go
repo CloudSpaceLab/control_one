@@ -87,10 +87,11 @@ func (p *OIDCProvider) Verify(ctx context.Context, rawToken string) (*Principal,
 	directRoles := extractStringSlice(rawClaims, "roles")
 
 	principal := &Principal{
-		Type:    "user",
-		Subject: subject,
-		Email:   email,
-		Groups:  groups,
+		authenticationAuthority: "oidc:" + idToken.Issuer,
+		Type:                    "user",
+		Subject:                 subject,
+		Email:                   email,
+		Groups:                  groups,
 	}
 
 	principal.Name = p.resolveDisplayName(rawClaims, subject, email)

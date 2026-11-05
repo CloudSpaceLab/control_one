@@ -214,68 +214,45 @@ func (s *Store) ListUsers(ctx context.Context, limit, offset int) ([]User, int, 
 
 // AssignRolesToUser ensures the provided roles exist and associates them with the user.
 func (s *Store) AssignRolesToUser(ctx context.Context, userID uuid.UUID, roles []string) error {
+	return s.assignAttributedRoles(ctx, userID, roles, "provisioning")
+}
+
+func (s *Store) assignAttributedRoles(ctx context.Context, userID uuid.UUID, roles []string, source string) error {
 	if s.db == nil {
 		return errors.New("store database not initialized")
 	}
 	if userID == uuid.Nil {
 		return errors.New("user id required")
 	}
-
+	if source != "administrator" && source != "provisioning" {
+		return errors.New("unsupported provisioning source")
+	}
 	roles = sanitizeRoles(roles)
 	if len(roles) == 0 {
 		return errors.New("roles required")
 	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return err
 	}
-	defer func() {
+	defer tx.Rollback()
+	var locked uuid.UUID
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE id=$1 AND disabled_at IS NULL FOR UPDATE`, userID).Scan(&locked); err != nil {
+		return err
+	}
+	for _, name := range roles {
+		role, err := s.ensureRole(ctx, tx, name)
 		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	for _, roleName := range roles {
-		roleName = strings.TrimSpace(roleName)
-		if roleName == "" {
-			continue
-		}
-
-		roleID, roleErr := s.ensureRole(ctx, tx, roleName)
-		if roleErr != nil {
-			err = roleErr
 			return err
 		}
-
-		// Check if role assignment already exists (idempotent)
-		var existingID uuid.UUID
-		checkErr := tx.QueryRowContext(ctx,
-			`SELECT id FROM user_roles WHERE user_id = $1 AND role_id = $2 AND tenant_id IS NULL LIMIT 1`,
-			userID, roleID).Scan(&existingID)
-		if checkErr == nil {
-			// Role assignment already exists, skip
-			continue
-		}
-		if !errors.Is(checkErr, sql.ErrNoRows) {
-			err = fmt.Errorf("check role %s: %w", roleName, checkErr)
-			return err
-		}
-
-		// Insert role assignment
-		if _, roleErr = tx.ExecContext(ctx, `
-            INSERT INTO user_roles (user_id, role_id, tenant_id, assigned_by, expires_at)
-            VALUES ($1, $2, NULL, NULL, NULL)
-        `, userID, roleID); roleErr != nil {
-			err = fmt.Errorf("assign role %s: %w", roleName, roleErr)
+		if err = s.attributeGlobalRole(ctx, tx, userID, role, source, nil); err != nil {
 			return err
 		}
 	}
-
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("commit role assignment: %w", err)
+	if err = projectGlobalRoleSources(ctx, tx, userID); err != nil {
+		return err
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) ensureRole(ctx context.Context, tx *sql.Tx, name string) (uuid.UUID, error) {
@@ -322,6 +299,34 @@ func sanitizeRoles(roles []string) []string {
 
 // ListUserRoles returns role names for the given user.
 func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	return s.listUserRoles(ctx, userID, false)
+}
+
+// ListGlobalUserRoles supplies the global identity editor. Tenant assignments
+// must never be round-tripped into SetUserRoles, which writes global grants.
+func (s *Store) ListGlobalUserRoles(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	return s.listUserRoles(ctx, userID, true)
+}
+
+// ListTenantUserRoles returns only active tenant-scoped roles for principal construction.
+func (s *Store) ListTenantUserRoles(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT lower(r.name) FROM user_roles ur JOIN roles r ON r.id=ur.role_id JOIN users u ON u.id=ur.user_id WHERE ur.user_id=$1 AND ur.tenant_id IS NOT NULL AND u.disabled_at IS NULL AND (ur.expires_at IS NULL OR ur.expires_at>NOW()) ORDER BY lower(r.name)`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var roles []string
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		roles = append(roles, name)
+	}
+	return roles, rows.Err()
+}
+
+func (s *Store) listUserRoles(ctx context.Context, userID uuid.UUID, globalOnly bool) ([]string, error) {
 	if s.db == nil {
 		return nil, errors.New("store database not initialized")
 	}
@@ -335,11 +340,15 @@ func (s *Store) ListUserRoles(ctx context.Context, userID uuid.UUID) ([]string, 
             SELECT LOWER(r.name) AS sort_key, MIN(r.name) AS name
             FROM user_roles ur
             JOIN roles r ON ur.role_id = r.id
+            JOIN users u ON u.id=ur.user_id
             WHERE ur.user_id = $1
+              AND u.disabled_at IS NULL
+              AND (ur.expires_at IS NULL OR ur.expires_at>NOW())
+              AND (NOT $2 OR ur.tenant_id IS NULL)
             GROUP BY LOWER(r.name)
         ) deduped
         ORDER BY sort_key
-    `, userID)
+    `, userID, globalOnly)
 	if err != nil {
 		return nil, fmt.Errorf("query user roles: %w", err)
 	}
@@ -392,7 +401,9 @@ func (s *Store) ListAccessibleTenants(
 			SELECT 1
 			FROM user_roles ur
 			JOIN roles r ON r.id = ur.role_id
+			JOIN users access_user ON access_user.id=ur.user_id
 			WHERE ur.user_id = $1
+			  AND access_user.disabled_at IS NULL
 			  AND LOWER(r.name) = ANY($2)
 			  AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
 			  AND (ur.tenant_id IS NULL OR ur.tenant_id = t.id)
@@ -476,6 +487,7 @@ func (s *Store) UserHasTenantRole(ctx context.Context, userID, tenantID uuid.UUI
 			WHERE ur.user_id = $1
 			  AND (ur.tenant_id IS NULL OR ur.tenant_id = $2)
 			  AND LOWER(r.name) = ANY($3)
+			  AND EXISTS(SELECT 1 FROM users current_user_record WHERE current_user_record.id=ur.user_id AND current_user_record.disabled_at IS NULL)
 			  AND (ur.expires_at IS NULL OR ur.expires_at > NOW())
 		)
 	`, userID, tenantID, pq.Array(roles)).Scan(&exists)
@@ -485,7 +497,8 @@ func (s *Store) UserHasTenantRole(ctx context.Context, userID, tenantID uuid.UUI
 	return exists, nil
 }
 
-// SetUserRoles replaces tenant-global role assignments for the user.
+// SetUserRoles replaces only administrator-owned global grants, preserving
+// independently managed sources. Legacy grants require explicit review.
 func (s *Store) SetUserRoles(ctx context.Context, userID uuid.UUID, roles []string) error {
 	if s.db == nil {
 		return errors.New("store database not initialized")
@@ -493,45 +506,44 @@ func (s *Store) SetUserRoles(ctx context.Context, userID uuid.UUID, roles []stri
 	if userID == uuid.Nil {
 		return errors.New("user id required")
 	}
-
-	roles = sanitizeRoles(roles)
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
+	defer tx.Rollback()
+	var locked uuid.UUID
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM users WHERE id=$1 FOR UPDATE`, userID).Scan(&locked); err != nil {
+		return err
+	}
+	var unknown bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles ur WHERE ur.user_id=$1 AND ur.tenant_id IS NULL AND (NOT EXISTS(SELECT 1 FROM global_role_sources g WHERE g.assignment_id=ur.id) OR EXISTS(SELECT 1 FROM global_role_sources g WHERE g.assignment_id=ur.id AND g.source='legacy_unknown')))`, userID).Scan(&unknown); err != nil {
+		return err
+	}
+	if unknown {
+		return ErrRoleSourceReviewRequired
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM global_role_sources g USING user_roles ur WHERE g.assignment_id=ur.id AND ur.user_id=$1 AND ur.tenant_id IS NULL AND g.source='administrator'`, userID); err != nil {
+		return err
+	}
+	for _, name := range sanitizeRoles(roles) {
+		role, err := s.ensureRole(ctx, tx, name)
+		if err != nil {
+			return err
 		}
-	}()
-
-	if _, err := tx.ExecContext(ctx, `
-        DELETE FROM user_roles
-        WHERE user_id = $1 AND tenant_id IS NULL
-    `, userID); err != nil {
-		return fmt.Errorf("clear user roles: %w", err)
-	}
-
-	for _, roleName := range roles {
-		roleID, roleErr := s.ensureRole(ctx, tx, roleName)
-		if roleErr != nil {
-			return roleErr
+		// Replacing only administrator grants preserves all independently managed sources.
+		var assignment uuid.UUID
+		err = tx.QueryRowContext(ctx, `INSERT INTO user_roles(user_id,role_id,tenant_id,assigned_by,expires_at) VALUES($1,$2,NULL,NULL,NULL) ON CONFLICT(user_id,role_id) WHERE tenant_id IS NULL DO UPDATE SET role_id=EXCLUDED.role_id RETURNING id`, userID, role).Scan(&assignment)
+		if err != nil {
+			return err
 		}
-		if _, roleErr = tx.ExecContext(ctx, `
-            INSERT INTO user_roles (user_id, role_id, tenant_id, assigned_by, expires_at)
-            VALUES ($1, $2, NULL, NULL, NULL)
-        `, userID, roleID); roleErr != nil {
-			return fmt.Errorf("assign role %s: %w", roleName, roleErr)
+		if _, err = tx.ExecContext(ctx, `INSERT INTO global_role_sources(assignment_id,source) VALUES($1,'administrator')`, assignment); err != nil {
+			return err
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit user role update: %w", err)
+	if err = projectGlobalRoleSources(ctx, tx, userID); err != nil {
+		return err
 	}
-	committed = true
-	return nil
+	return tx.Commit()
 }
 
 // ListRoles returns all defined roles.

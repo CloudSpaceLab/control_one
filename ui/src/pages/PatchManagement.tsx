@@ -6,6 +6,7 @@ import { Skeleton } from '../components/ui/skeleton';
 import { Alert, SectionHeader, EmptyState, StatusTag, KpiTile, type StateTone } from '../components/kit';
 import { useApiClient } from '../hooks/useApiClient';
 import { useTenant } from '../providers/TenantProvider';
+import { useAuth } from '../providers/AuthProvider';
 import { AllTenantPatchSummary } from '../features/patch-management/AllTenantPatchSummary';
 import { PatchAssessmentNotice } from '../features/patch-management/PatchAssessmentNotice';
 import { toast } from 'sonner';
@@ -17,6 +18,8 @@ import { OfflineContentReview } from '../features/patch-management/OfflineConten
 import { OfflinePlanPreparation } from '../features/patch-management/OfflinePlanPreparation';
 import {ProxyManagementDialog} from '../features/patch-management/ProxyManagementDialog';
 import {PatchReviewPanel} from '../features/patch-management/PatchReviewPanel';
+import {PatchOrganizationPanel} from '../features/patch-management/PatchOrganizationPanel';
+import {TenantRolePanel} from '../features/patch-management/TenantRolePanel';
 import {PatchOperationsPanel} from '../features/patch-management/PatchOperationsPanel';
 import type {
   PatchDeployment,
@@ -49,6 +52,8 @@ type PendingApprovalDeny = { approval: PatchApproval; error?: string };
 
 export function PatchManagement(): JSX.Element {
   const client = useApiClient();
+  const { profile } = useAuth();
+  const canRequestPatches = (profile?.roles ?? []).some(role => role === 'admin' || role === 'operator');
   const { currentTenantId } = useTenant();
   const [tab, setTab] = useState<Tab>(()=>new URLSearchParams(window.location.search).get('view')==='reviews'?'reviews':'deployments');
   const [posture, setPosture] = useState<PatchDeploymentSummary | null>(null);
@@ -83,7 +88,9 @@ export function PatchManagement(): JSX.Element {
       client.listPatchDeployments({ tenantId: currentTenantId, limit: 50 }),
       client.listSquidProxies(currentTenantId),
       client.listMaintenanceWindows(currentTenantId),
-      client.listPatchApprovals({ status: 'pending', tenantId: currentTenantId, limit: 100 }),
+      canRequestPatches
+        ? client.listPatchApprovals({ status: 'pending', tenantId: currentTenantId, limit: 100 })
+        : Promise.resolve({ data: [] as PatchApproval[], pagination: { total: 0 } }),
     ]);
 
     if (summary.status === 'fulfilled') {
@@ -126,7 +133,7 @@ export function PatchManagement(): JSX.Element {
 
     setLoadErrors(nextErrors);
     setLoading(false);
-  }, [client, currentTenantId]);
+  }, [client, currentTenantId, canRequestPatches]);
 
   useEffect(() => {
     refresh();
@@ -164,10 +171,10 @@ export function PatchManagement(): JSX.Element {
 	              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
 	              {loading ? 'Refreshing…' : 'Refresh'}
             </Button>
-            <Button size="sm" onClick={() => setShowDeployForm(true)}>
+            {canRequestPatches && <Button size="sm" onClick={() => setShowDeployForm(true)}>
               <ShieldAlert className="mr-2 h-4 w-4" />
               Deploy patches…
-            </Button>
+            </Button>}
           </div>
         }
       />
@@ -239,11 +246,11 @@ export function PatchManagement(): JSX.Element {
           onClick={() => setTab('windows')}
           label={tabLabel('Windows', windows.length, loadErrors.windows)}
         />
-        <TabButton
+        {canRequestPatches && <TabButton
           active={tab === 'approvals'}
           onClick={() => setTab('approvals')}
           label={tabLabel('Approvals', pendingApprovalTotal, loadErrors.approvals)}
-        />
+        />}
         {currentTenantId&&<TabButton active={tab==='reviews'} onClick={()=>setTab('reviews')} label="Review policy & ownership"/>}
       </div>
 
@@ -267,7 +274,7 @@ export function PatchManagement(): JSX.Element {
         </Alert>
       ) : null}
 
-      {tab==='reviews'&&currentTenantId&&<><PatchReviewPanel tenantId={currentTenantId}/><PatchOperationsPanel tenantId={currentTenantId}/></>}
+      {tab==='reviews'&&currentTenantId&&<><TenantRolePanel tenantId={currentTenantId}/><PatchOrganizationPanel tenantId={currentTenantId}/><PatchReviewPanel tenantId={currentTenantId}/><PatchOperationsPanel tenantId={currentTenantId}/></>}
       {tab === 'deployments' && (
         <DeploymentsPanel
           loading={loading}
@@ -296,7 +303,7 @@ export function PatchManagement(): JSX.Element {
           onChanged={refresh}
         />
       )}
-      {tab === 'approvals' && (
+      {tab === 'approvals' && canRequestPatches && (
         <ApprovalQueue
           approvals={pendingApprovals}
           totalCount={pendingApprovalTotal}
@@ -305,6 +312,7 @@ export function PatchManagement(): JSX.Element {
           onChanged={refresh}
         />
       )}
+      {tab === 'approvals' && !canRequestPatches && <p>Installation approvals require an authorized tenant operator or administrator. Organizational policy review is available under Review policy & ownership.</p>}
 
       {selected && <DeploymentNodeDetail deployment={selected} onClose={() => setSelected(null)} />}
       {showProxyForm && currentTenantId && (

@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Users } from './Users';
+import { APIError } from '../lib/api';
 
 const mocks = vi.hoisted(() => {
   const reloadUsers = vi.fn();
@@ -19,6 +20,8 @@ const mocks = vi.hoisted(() => {
       display_name: 'Ada Admin',
       email: 'admin@local',
       roles: ['viewer'],
+      role_scope: 'global' as 'global' | undefined,
+      role_revision: 'fixture-role-revision',
       created_at: '2026-01-01T00:00:00Z',
     },
   ];
@@ -71,6 +74,8 @@ describe('Users', () => {
       display_name: 'Ada Admin',
       email: 'admin@local',
       roles: ['viewer'],
+      role_scope: 'global',
+      role_revision: 'fixture-role-revision',
       created_at: '2026-01-01T00:00:00Z',
     });
     mocks.usersError = null;
@@ -87,6 +92,17 @@ describe('Users', () => {
     expect(row).toBeTruthy();
     expect(within(row as HTMLElement).getAllByText('viewer')).toHaveLength(1);
     expect(within(row as HTMLElement).getAllByText('operator')).toHaveLength(1);
+  });
+
+  it('blocks global editing when the backend has not identified the role scope', async () => {
+    mocks.users[0].role_scope = undefined;
+    const user = userEvent.setup();
+    render(<Users />);
+    expect(await screen.findByText('Global role scope unavailable')).toBeVisible();
+    expect(screen.getByRole('button', {name: 'Edit Roles'})).toBeDisabled();
+    await user.click(screen.getByLabelText(/select ada admin/i));
+    expect(screen.getByRole('button', {name: /Bulk Replace Roles/i})).toBeDisabled();
+    expect(mocks.updateUserRoles).not.toHaveBeenCalled();
   });
 
   it('does not show a false empty state when users fail to load', async () => {
@@ -127,7 +143,7 @@ describe('Users', () => {
 
     const dialog = screen.getByRole('dialog', { name: /bulk replace roles/i });
     expect(
-      within(dialog as HTMLElement).getByText(/this replaces existing roles for 1 selected user/i),
+      within(dialog as HTMLElement).getByText(/this replaces global roles across tenants for 1 selected user/i),
     ).toBeInTheDocument();
 
     await user.click(within(dialog as HTMLElement).getByRole('checkbox', { name: /operator/i }));
@@ -136,7 +152,7 @@ describe('Users', () => {
     await waitFor(() => expect(mocks.updateUserRoles).toHaveBeenCalledTimes(1));
     expect(mocks.updateUserRoles).toHaveBeenCalledWith(
       '11111111-1111-1111-1111-111111111111',
-      { roles: ['operator'] },
+      { roles: ['operator'], expected_revision: 'fixture-role-revision' },
     );
     await waitFor(() => expect(screen.getByText(/successfully replaced roles for 1 user/i)).toBeInTheDocument());
   });
@@ -154,8 +170,20 @@ describe('Users', () => {
     await user.click(within(dialog).getByRole('button', { name: /replace roles for 1 user/i }));
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-      'Bulk role update failed: rbac write denied',
+      'rbac write denied',
     );
     expect(screen.getByRole('dialog', { name: /bulk replace roles/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', {name: /replace roles for 1 user/i})).toBeDisabled();
   });
+  it('blocks stale single-user retries and requires a newly reviewed draft', async () => {
+    mocks.updateUserRoles.mockRejectedValueOnce(new APIError('Global roles changed. Reload current roles.', 409));
+    const user = userEvent.setup();
+    render(<Users />);
+    await user.click(await screen.findByRole('button', {name: 'Edit Roles'}));
+    await user.click(screen.getByRole('button', {name: 'Save Changes'}));
+    expect(await screen.findByText(/this draft cannot be saved/i)).toBeVisible();
+    expect(screen.getByRole('button', {name: 'Save Changes'})).toBeDisabled();
+    expect(mocks.updateUserRoles).toHaveBeenCalledTimes(1);
+  });
+
 });

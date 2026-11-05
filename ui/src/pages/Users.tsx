@@ -1,3 +1,4 @@
+import { GlobalRoleSources } from '../features/patch-management/GlobalRoleSources';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { RefreshCw, Users as UsersIcon, X } from 'lucide-react';
 import { useUsers } from '../hooks/useUsers';
@@ -5,7 +6,7 @@ import { useRoles } from '../hooks/useRoles';
 import { useApiClient } from '../hooks/useApiClient';
 import { useFormFeedback } from '../hooks/useFormFeedback';
 import { useToast } from '../providers/ToastProvider';
-import { User, Role } from '../lib/api';
+import { User, Role, APIError } from '../lib/api';
 import { Button } from '../components/ui/button';
 import {
   DataTable,
@@ -52,6 +53,10 @@ export function Users(): JSX.Element {
   const [isBulkRoleModalOpen, setIsBulkRoleModalOpen] = useState(false);
   const [bulkAssigning, setBulkAssigning] = useState(false);
   const [bulkAssignRoles, setBulkAssignRoles] = useState<string[]>([]);
+  const [roleConflict, setRoleConflict] = useState(false);
+  const [sourceReviewed, setSourceReviewed] = useState(false);
+  const [bulkBaselines, setBulkBaselines] = useState<User[]>([]);
+  const [bulkFailed, setBulkFailed] = useState(false);
   const [bulkError, setBulkError] = useState<string | null>(null);
 
   const {
@@ -91,7 +96,10 @@ export function Users(): JSX.Element {
   }, [users]);
 
   const handleEditRoles = (user: User) => {
-    setSelectedUser(user);
+    if ((user.role_scope !== 'global' || !user.role_revision)) { showError('Global role scope is unavailable. Refresh after the matching backend is deployed.'); return; }
+    setRoleConflict(false);
+    setSourceReviewed(false);
+    setSelectedUser({...user, roles: [...user.roles]});
     setSelectedRoles(uniqueRoleNames(user.roles));
     setIsEditingRoles(true);
     resetFeedback();
@@ -115,13 +123,13 @@ export function Users(): JSX.Element {
 
   const handleSaveRoles = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedUser) return;
+    if (!selectedUser || selectedUser.role_scope !== 'global' || !selectedUser.role_revision || roleConflict) return;
 
     setUpdating(true);
     resetFeedback();
 
     try {
-      await api.updateUserRoles(selectedUser.id, { roles: selectedRoles });
+      await api.updateUserRoles(selectedUser.id, { roles: selectedRoles, expected_revision: selectedUser.role_revision });
       showSuccess('User roles updated successfully');
       setIsEditingRoles(false);
       setSelectedUser(null);
@@ -129,6 +137,7 @@ export function Users(): JSX.Element {
       reloadUsers();
       reloadRoles();
     } catch (error: unknown) {
+      if (error instanceof APIError && (error.status === 409 || error.status === 403)) setRoleConflict(true);
       const message = error instanceof Error ? error.message : 'Failed to update user roles';
       showError(message);
       showToast(message, 'error');
@@ -163,6 +172,8 @@ export function Users(): JSX.Element {
   };
 
   const handleBulkAssignRoles = async () => {
+    if (users.some(user => selectedUserIds.has(user.id) && (user.role_scope !== 'global' || !user.role_revision))) { setBulkError('Global role scope is unavailable for a selected account. Refresh before editing.'); return; }
+    if (bulkFailed) return;
     if (selectedUserIds.size === 0) {
       showToast('Please select at least one user', 'error');
       return;
@@ -177,9 +188,13 @@ export function Users(): JSX.Element {
     setBulkError(null);
 
     try {
-      const userIds = Array.from(selectedUserIds);
-      const promises = userIds.map((userId) => api.updateUserRoles(userId, { roles: bulkAssignRoles }));
-      await Promise.all(promises);
+      const userIds = bulkBaselines.map(user => user.id);
+      const results = await Promise.allSettled(bulkBaselines.map(user => api.updateUserRoles(user.id, { roles: bulkAssignRoles, expected_revision: user.role_revision! })));
+      const failed = results.filter(result => result.status === 'rejected');
+      if (failed.length) {
+        const reason = failed[0].status === 'rejected' ? failed[0].reason : null;
+        throw new Error(`${results.length - failed.length} saved; ${failed.length} failed. ${reason instanceof Error ? reason.message : 'Role update failed.'} Cancel, refresh the directory and review before retrying.`);
+      }
       showSuccess(`Successfully replaced roles for ${userIds.length} user(s)`);
       setSelectedUserIds(new Set());
       setBulkAssignRoles([]);
@@ -187,6 +202,7 @@ export function Users(): JSX.Element {
       reloadUsers();
       reloadRoles();
     } catch (error: unknown) {
+      setBulkFailed(true);
       const message = error instanceof Error ? error.message : 'Failed to assign roles';
       setBulkError(message);
       showError(message);
@@ -236,10 +252,10 @@ export function Users(): JSX.Element {
     },
     {
       id: 'roles',
-      header: 'Roles',
+      header: 'Global roles',
       cell: ({ row }) => (
         <div className="flex flex-wrap gap-1">
-          {row.original.roles && row.original.roles.length > 0 ? (
+          {(row.original.role_scope !== 'global' || !row.original.role_revision) ? <span className="text-xs text-text-muted">Global role scope unavailable</span> : row.original.roles && row.original.roles.length > 0 ? (
             uniqueRoleNames(row.original.roles).map((roleName) => {
               const role = roleMap.get(roleName.toLowerCase());
               return (
@@ -265,7 +281,7 @@ export function Users(): JSX.Element {
       id: 'actions',
       header: 'Actions',
       cell: ({ row }) => (
-        <Button variant="ghost" size="sm" onClick={() => handleEditRoles(row.original)}>
+        <Button variant="ghost" size="sm" disabled={(row.original.role_scope !== 'global' || !row.original.role_revision)} onClick={() => handleEditRoles(row.original)}>
           Edit Roles
         </Button>
       ),
@@ -278,7 +294,7 @@ export function Users(): JSX.Element {
       <SectionHeader
         eyebrow="GOVERNANCE · IDENTITY"
         title="Users & Roles"
-        description="Manage users and their role assignments."
+        description="Manage existing accounts and global roles across tenants. Tenant role assignments are managed separately in Patch posture → Review policy & ownership."
         actions={
           <>
             {selectedUserIds.size > 0 && (
@@ -289,9 +305,11 @@ export function Users(): JSX.Element {
                   size="md"
                   onClick={() => {
                     setBulkError(null);
+                    setBulkFailed(false);
+                    setBulkBaselines(users.filter(user => selectedUserIds.has(user.id)).map(user => ({...user, roles: [...user.roles]})));
                     setIsBulkRoleModalOpen(true);
                   }}
-                  disabled={bulkAssigning}
+                  disabled={bulkAssigning || users.some(user => selectedUserIds.has(user.id) && (user.role_scope !== 'global' || !user.role_revision))}
                 >
                   Bulk Replace Roles
                 </Button>
@@ -420,11 +438,11 @@ export function Users(): JSX.Element {
           }}
         >
           <div
-            className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
+            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-border-subtle p-4">
-              <h2 id="edit-user-roles-title" className="font-display text-base font-semibold">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border-subtle bg-elevated p-5">
+              <h2 id="edit-user-roles-title" className="min-w-0 break-words font-display text-base font-semibold">
                 Edit Roles for {selectedUser.display_name || selectedUser.external_id}
               </h2>
               <Button
@@ -438,16 +456,18 @@ export function Users(): JSX.Element {
               </Button>
             </div>
 
+            <GlobalRoleSources key={selectedUser.id} userID={selectedUser.id} onReviewed={() => { setSourceReviewed(true); setRoleConflict(true); reloadUsers(); }} />
             <form onSubmit={handleSaveRoles}>
               <div className="flex flex-col gap-3 p-4">
                 {formError && (
                   <p className="text-xs text-state-critical" role="alert">{formError}</p>
                 )}
+                {roleConflict && <p role={sourceReviewed ? "status" : "alert"} className="text-sm text-text-secondary">{sourceReviewed ? "Role source changed. Close and reopen this editor before changing global roles." : "This draft cannot be saved. Cancel, refresh the directory and review current roles and administrator access before opening a new draft."}</p>}
                 {formSuccess && (
                   <p className="text-xs text-state-healthy">{formSuccess}</p>
                 )}
 
-                <p className="text-sm text-text-secondary">Select roles to assign to this user:</p>
+                <p className="text-sm text-text-secondary">Select global roles for this user. These apply across tenants. Temporary tenant assignments are not included or changed here. If another administrator changes these roles, this draft will be rejected. Cancel and refresh the directory before reviewing a new draft.</p>
                 <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
                   {roles.map((role) => (
                     <label
@@ -480,7 +500,7 @@ export function Users(): JSX.Element {
                 <Button variant="secondary" size="md" type="button" onClick={handleCancelEdit} disabled={updating}>
                   Cancel
                 </Button>
-                <Button variant="primary" size="md" type="submit" disabled={updating || selectedRoles.length === 0}>
+                <Button variant="primary" size="md" type="submit" disabled={updating || roleConflict || selectedRoles.length === 0}>
                   {updating ? 'Saving...' : 'Save Changes'}
                 </Button>
               </div>
@@ -503,11 +523,11 @@ export function Users(): JSX.Element {
           }}
         >
           <div
-            className="w-full max-w-lg rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
+            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-lg border border-border-subtle bg-elevated shadow-[var(--shadow-panel)]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-border-subtle p-4">
-              <h2 id="bulk-replace-roles-title" className="font-display text-base font-semibold">Bulk Replace Roles</h2>
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border-subtle bg-elevated p-5">
+              <h2 id="bulk-replace-roles-title" className="min-w-0 break-words font-display text-base font-semibold">Bulk Replace Roles</h2>
               <Button
                 variant="ghost"
                 size="icon"
@@ -529,7 +549,7 @@ export function Users(): JSX.Element {
                 </p>
               ) : null}
               <p className="text-sm text-text-secondary">
-                This replaces existing roles for {selectedUserIds.size} selected user(s):
+                This replaces global roles across tenants for {selectedUserIds.size} selected user(s). Tenant assignments remain unchanged:
               </p>
               <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
                 {roles.map((role) => (
@@ -579,7 +599,7 @@ export function Users(): JSX.Element {
                 size="md"
                 type="button"
                 onClick={handleBulkAssignRoles}
-                disabled={bulkAssigning || bulkAssignRoles.length === 0}
+                disabled={bulkAssigning || bulkFailed || bulkAssignRoles.length === 0}
               >
                 {bulkAssigning ? 'Replacing...' : `Replace roles for ${selectedUserIds.size} User(s)`}
               </Button>

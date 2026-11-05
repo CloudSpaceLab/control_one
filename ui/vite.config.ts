@@ -1,9 +1,16 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Proxy settings are server-only. Vite does not load .env files into
+  // process.env before evaluating this configuration; load them explicitly.
+  const fileEnv = loadEnv(mode, __dirname, 'CONTROL_ONE_');
+  const apiTarget = process.env.CONTROL_ONE_API_URL || fileEnv.CONTROL_ONE_API_URL || 'http://127.0.0.1:8443';
+  const agentPublicURL = process.env.CONTROL_ONE_AGENT_PUBLIC_URL || fileEnv.CONTROL_ONE_AGENT_PUBLIC_URL || 'https://127.0.0.1:18443';
+
+  return {
   plugins: [react(), tailwindcss()],
   base: '/console/',
   resolve: {
@@ -41,24 +48,21 @@ export default defineConfig({
     port: 4173,
     proxy: {
       '/api': {
-        target: 'https://localhost:8443',
+        target: apiTarget,
         changeOrigin: false,
-        secure: false, // self-signed CP cert in dev
+        secure: false, // allow either local HTTP or a self-signed HTTPS endpoint
         configure: (proxy) => {
-          // Force the upstream Host header so the CP's deriveControlPlaneURL
-          // (controlplane/internal/server/agent_download.go:828) returns a
-          // URL the remote agent host can actually reach via the reverse
-          // SSH tunnel (remote:18443 → local:8443). The X-Forwarded-Proto
-          // hint nudges deriveControlPlaneURL toward https since the CP
-          // request itself arrives over TLS.
+          // Advertise an agent URL reachable by the enrolling host.
+          // local.ps1 sets this to the LAN UI proxy for local demos.
           proxy.on('proxyReq', (proxyReq) => {
-            proxyReq.setHeader('Host', '127.0.0.1:18443');
-            proxyReq.setHeader('X-Forwarded-Proto', 'https');
+            const publicURL = new URL(agentPublicURL);
+            proxyReq.setHeader('Host', publicURL.host);
+            proxyReq.setHeader('X-Forwarded-Proto', publicURL.protocol.slice(0, -1));
           });
         },
       },
       '/healthz': {
-        target: 'https://localhost:8443',
+        target: apiTarget,
         changeOrigin: false,
         secure: false,
       },
@@ -67,4 +71,5 @@ export default defineConfig({
   preview: {
     port: 4174,
   },
+  };
 });

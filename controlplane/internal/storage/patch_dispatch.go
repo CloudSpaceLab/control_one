@@ -47,6 +47,19 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err = lockAutomationTenant(ctx, tx, p.TenantID); err != nil {
+		return nil, err
+	}
+	organizationRevision, err := checkPatchOrganizationTx(ctx, tx, p.TenantID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err = checkOrganizationApprovalBinding(ctx, tx, p.TenantID, p.ApprovalID, organizationRevision); err != nil {
+		return nil, err
+	}
+	if err = checkPatchOrganizationScopeTx(ctx, tx, p.TenantID, p.NodeID, p.Mode, p.Payload, organizationRevision); err != nil {
+		return nil, err
+	}
 	var scheduled struct {
 		AutomationRunID string `json:"automation_run_id"`
 	}
@@ -227,6 +240,11 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 		return nil, errors.New("invalid patch dispatch payload")
 	}
 	payload["node_patch_state_id"], payload["node_id"], payload["deployment_id"], payload["mode"] = state.ID.String(), p.NodeID.String(), p.DeploymentID.String(), p.Mode
+	if organizationRevision > 0 {
+		payload["organization_policy_revision"] = organizationRevision
+	} else {
+		delete(payload, "organization_policy_revision")
+	}
 	delete(payload, "action_plan_id")
 	raw, err := json.Marshal(payload)
 	if err != nil {

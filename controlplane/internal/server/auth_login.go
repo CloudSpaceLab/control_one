@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
@@ -119,28 +120,46 @@ func (s *Server) authenticateOperator(ctx context.Context, email, password strin
 	// 2. LDAP — either an existing ldap-provisioned user, or a brand-new
 	// directory user that we auto-provision on first successful bind.
 	if s.ldapProvider != nil {
+		if local != nil && local.DisabledAt.Valid {
+			return nil, nil, storage.ErrInvalidCredentials
+		}
+		if local != nil && local.AuthProvider != storage.AuthProviderLDAP {
+			return nil, nil, storage.ErrInvalidCredentials
+		}
 		ldapUser, err := s.ldapProvider.Authenticate(ctx, email, password)
 		if err != nil {
 			return nil, nil, err
 		}
 		// Provision-on-first-login: create a `ldap`-provider user record
 		// the first time we see them. Subsequent logins update last_login.
-		emailLower := strings.ToLower(ldapUser.Email)
+		emailLower := strings.ToLower(strings.TrimSpace(ldapUser.Email))
+		if emailLower == "" || (local != nil && !strings.EqualFold(strings.TrimSpace(local.Email), emailLower)) {
+			return nil, nil, storage.ErrInvalidCredentials
+		}
 		acct, err := s.store.CreateLocalUser(ctx, storage.CreateLocalUserParams{
 			Email:       emailLower,
 			DisplayName: ldapUser.DisplayName,
 			Provider:    storage.AuthProviderLDAP,
-			Roles:       ldapUser.Roles,
 		})
 		if err != nil {
 			return nil, nil, err
 		}
 		// Refresh role assignment on every login so directory changes
 		// take effect within one heartbeat.
-		if len(ldapUser.Roles) > 0 {
-			_ = s.store.SetUserRoles(ctx, acct.ID, ldapUser.Roles)
+		if acct.DisabledAt.Valid {
+			return nil, nil, storage.ErrInvalidCredentials
 		}
-		return acct, ldapUser.Roles, nil
+		sourceStore, ok := s.store.(interface {
+			ReconcileDirectoryRoleSources(context.Context, uuid.UUID, []string) error
+		})
+		if !ok {
+			return nil, nil, storage.ErrRoleSourceReviewRequired
+		}
+		if err := sourceStore.ReconcileDirectoryRoleSources(ctx, acct.ID, ldapUser.Roles); err != nil {
+			return nil, nil, err
+		}
+		roles, err := s.store.ListUserRoles(ctx, acct.ID)
+		return acct, roles, err
 	}
 
 	if local != nil {

@@ -1225,7 +1225,7 @@ func TestUserAndRoleEndpoints(t *testing.T) {
 	})
 
 	t.Run("update user roles", func(t *testing.T) {
-		payload := updateUserRolesRequest{Roles: []string{"operator", "admin"}}
+		payload := updateUserRolesRequest{Roles: []string{"operator", "admin"}, RoleScope: "global", ExpectedRevision: "fixture-role-revision"}
 		rec := call(http.MethodPatch, "/api/v1/users/"+targetUserID.String(), payload)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200 got %d body=%s", rec.Code, rec.Body.String())
@@ -3551,6 +3551,21 @@ func (f *fakeStore) ListUserRoles(_ context.Context, userID uuid.UUID) ([]string
 		}
 	}
 	return f.userRoles[userID], nil
+}
+
+func (f *fakeStore) ListGlobalUserRoles(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	// Legacy fixtures contain global assignments only. Scoped cases override this.
+	return f.ListUserRoles(ctx, userID)
+}
+
+func (f *fakeStore) HasCurrentGlobalAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	roles, err := f.ListGlobalUserRoles(ctx, userID)
+	for _, role := range roles {
+		if strings.EqualFold(role, "admin") {
+			return true, err
+		}
+	}
+	return false, err
 }
 
 func (f *fakeStore) GetUser(_ context.Context, userID uuid.UUID) (*storage.User, error) {
@@ -9046,4 +9061,29 @@ func TestHandleListNotificationsPreservesActorNameWithoutUserLookup(t *testing.T
 	if len(body.Data) != 1 || body.Data[0].ActorName != "Ada Lovelace" {
 		t.Fatalf("notifications=%+v, want prefilled actor name", body.Data)
 	}
+}
+
+func (f *fakeStore) GetGlobalRoleState(ctx context.Context, user uuid.UUID) (storage.GlobalRoleState, error) {
+	roles, err := f.ListGlobalUserRoles(ctx, user)
+	return storage.GlobalRoleState{Roles: roles, Revision: "fixture-role-revision"}, err
+}
+func (f *fakeStore) ReplaceGlobalRolesAuthorized(ctx context.Context, actor, target uuid.UUID, expected string, roles []string) error {
+	if expected != "fixture-role-revision" {
+		return storage.ErrGovernanceConflict
+	}
+	return f.SetUserRoles(ctx, target, roles)
+}
+
+// Authentication mock implements the source-aware persistence contract. Real
+// source preservation and atomic rollback are exercised against PostgreSQL.
+func (f *fakeStore) PersistAuthenticationRoles(ctx context.Context, authority, subject, email, name string, roles []string) (*storage.User, []string, error) {
+	u, err := f.EnsureUser(ctx, subject, email, name)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err = f.AssignRolesToUser(ctx, u.ID, roles); err != nil {
+		return nil, nil, err
+	}
+	effective, err := f.ListUserRoles(ctx, u.ID)
+	return u, effective, err
 }

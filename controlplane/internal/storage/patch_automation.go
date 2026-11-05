@@ -129,7 +129,21 @@ func loadAutomationApproval(ctx context.Context, tx *sql.Tx, tenant, approval uu
 }
 func automationRole(ctx context.Context, tx *sql.Tx, tenant, actor uuid.UUID, authority string) error {
 	var allowed bool
-	e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles u JOIN roles r ON r.id=u.role_id WHERE u.user_id=$1 AND (u.tenant_id=$2 OR u.tenant_id IS NULL) AND (u.expires_at IS NULL OR u.expires_at>NOW()) AND (r.name='admin' OR ($3='individual_approval' AND r.name='operator')))`, actor, tenant, authority).Scan(&allowed)
+	// A stored LDAP grant alone does not prove present directory membership.
+	// Fail closed for scheduled authority until directory revalidation is
+	// available at every execution boundary.
+	var provider, external string
+	e := tx.QueryRowContext(ctx, `SELECT auth_provider,external_id FROM users WHERE id=$1 AND disabled_at IS NULL`, actor).Scan(&provider, &external)
+	if e != nil {
+		return fmt.Errorf("current scheduling authority unavailable: %w", e)
+	}
+	if strings.HasPrefix(external, "auth:v1:") {
+		return fmt.Errorf("authentication-backed scheduling authority requires execution-time provider revalidation")
+	}
+	if provider == "ldap" {
+		return fmt.Errorf("directory-backed scheduling authority cannot be used until directory authority is qualified")
+	}
+	e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles u JOIN roles r ON r.id=u.role_id WHERE u.user_id=$1 AND (u.tenant_id=$2 OR u.tenant_id IS NULL) AND (u.expires_at IS NULL OR u.expires_at>NOW()) AND (r.name='admin' OR ($3='individual_approval' AND r.name='operator')))`, actor, tenant, authority).Scan(&allowed)
 	if e != nil {
 		return e
 	}
@@ -162,6 +176,13 @@ func (s *Store) QueuePatchAutomationRun(ctx context.Context, tenant, approval, a
 	}
 	defer tx.Rollback()
 	if e = lockAutomationTenant(ctx, tx, tenant); e != nil {
+		return PatchAutomationRun{}, e
+	}
+	organizationRevision, e := checkPatchOrganizationTx(ctx, tx, tenant, nil)
+	if e != nil {
+		return PatchAutomationRun{}, e
+	}
+	if e = checkOrganizationApprovalBinding(ctx, tx, tenant, approval, organizationRevision); e != nil {
 		return PatchAutomationRun{}, e
 	}
 	var raw []byte
@@ -250,6 +271,10 @@ func checkAutomationRunTx(ctx context.Context, tx *sql.Tx, tenant, id uuid.UUID)
 	if e := lockAutomationTenant(ctx, tx, tenant); e != nil {
 		return r, b, e
 	}
+	organizationRevision, organizationErr := checkPatchOrganizationTx(ctx, tx, tenant, nil)
+	if organizationErr != nil {
+		return r, b, organizationErr
+	}
 	if e := tx.QueryRowContext(ctx, `SELECT revision,document FROM patch_review_operations WHERE tenant_id=$1 FOR UPDATE`, tenant).Scan(&revision, &raw); e != nil {
 		return r, b, e
 	}
@@ -260,6 +285,9 @@ func checkAutomationRunTx(ctx context.Context, tx *sql.Tx, tenant, id uuid.UUID)
 	var e error
 	r, e = scanAutomation(tx.QueryRowContext(ctx, `SELECT `+automationColumns+` FROM patch_automation_runs WHERE id=$1 AND tenant_id=$2 FOR UPDATE`, id, tenant).Scan)
 	if e != nil {
+		return r, b, e
+	}
+	if e = checkOrganizationApprovalBinding(ctx, tx, tenant, r.ApprovalID, organizationRevision); e != nil {
 		return r, b, e
 	}
 	now := time.Now().UTC()

@@ -90,7 +90,7 @@ const NAV_GROUPS: NavGroupDef[] = [
         to: '/infrastructure/patch',
         label: 'Patch posture',
         icon: ShieldAlert,
-        roles: ['admin', 'operator'],
+        roles: ['admin', 'operator', 'ciso', 'viewer'],
       },
     ],
   },

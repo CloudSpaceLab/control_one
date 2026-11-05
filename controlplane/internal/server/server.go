@@ -76,6 +76,9 @@ type Store interface {
 	ListUsers(context.Context, int, int) ([]storage.User, int, error)
 	SetUserRoles(context.Context, uuid.UUID, []string) error
 	ListUserRoles(context.Context, uuid.UUID) ([]string, error)
+	ListGlobalUserRoles(context.Context, uuid.UUID) ([]string, error)
+	GetGlobalRoleState(context.Context, uuid.UUID) (storage.GlobalRoleState, error)
+	ReplaceGlobalRolesAuthorized(context.Context, uuid.UUID, uuid.UUID, string, []string) error
 	ListRoles(context.Context) ([]storage.Role, error)
 	ListJobs(context.Context, uuid.UUID, string, storage.JobStatus, int, int) ([]storage.Job, int, error)
 	CreateJob(context.Context, *storage.Job, *storage.JobEvent) (*storage.Job, error)
@@ -946,7 +949,7 @@ type Server struct {
 	enrollmentReaper enrollmentReaperState
 	// clockOverride is optional — tests override it to deterministically
 	// drive the reaper without real wall-clock delays.
-	clockOverride func() time.Time
+	clockOverride   func() time.Time
 	patchReviewStop func()
 	// auditAsync controls whether recordAudit dispatches the store write on a
 	// goroutine. Production defaults to true; tests flip it to false per-server
@@ -989,7 +992,9 @@ type Server struct {
 	ipBehaviorWindows     ipBehaviorCurrentWindowStore
 	// LDAP authenticator — nil when LDAP is disabled in config. Login flow
 	// falls through to it after local password verify fails.
-	ldapProvider *auth.LDAPProvider
+	ldapProvider interface {
+		Authenticate(context.Context, string, string) (*auth.LDAPUser, error)
+	}
 	// ipIntel handles geo + ASN + reputation lookups for Investigate.
 	// nil when no provider is configured; handler degrades gracefully.
 	ipIntel *ipintel.Service
@@ -1402,8 +1407,10 @@ func (s *Server) registerRoutes() {
 	s.baseRouter.HandleFunc("/api/v1/patch/offline/prepare", s.handleOfflinePreparation)
 	s.baseRouter.HandleFunc("/api/v1/patch/online/prepare", s.handleOnlinePreparation)
 	s.baseRouter.HandleFunc("/api/v1/patch/reviews", s.handlePatchGovernance)
-	s.baseRouter.HandleFunc("/api/v1/patch/review-operations",s.handlePatchReviewOperations)
-	s.baseRouter.HandleFunc("/api/v1/patch/automation-runs",s.handlePatchAutomation)
+	s.baseRouter.HandleFunc("/api/v1/patch/organization-policy", s.handlePatchOrganizationPolicy)
+	s.baseRouter.HandleFunc("/api/v1/tenant-role-controls", s.handleTenantRoleControls)
+	s.baseRouter.HandleFunc("/api/v1/patch/review-operations", s.handlePatchReviewOperations)
+	s.baseRouter.HandleFunc("/api/v1/patch/automation-runs", s.handlePatchAutomation)
 	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows", s.handleMaintenanceWindowsCollection)
 	s.baseRouter.HandleFunc("/api/v1/patch/maintenance-windows/", s.handleMaintenanceWindowSubroute)
 	s.baseRouter.HandleFunc("/api/v1/patch/proxies", s.handleSquidProxiesCollection)
@@ -1547,6 +1554,15 @@ func (s *Server) handleUserSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/users/")
+	if strings.HasSuffix(idStr, "/role-sources") {
+		userID, err := uuid.Parse(strings.TrimSuffix(idStr, "/role-sources"))
+		if err != nil {
+			http.Error(w, "invalid user id", http.StatusBadRequest)
+			return
+		}
+		s.handleGlobalRoleSources(w, r, userID)
+		return
+	}
 	userID, err := uuid.Parse(idStr)
 	if err != nil {
 		http.Error(w, "invalid user id", http.StatusBadRequest)
@@ -1565,7 +1581,7 @@ func (s *Server) handleUserSubroutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 		return
 	}
 
@@ -1584,13 +1600,13 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]userResponse, 0, len(users))
 	for _, user := range users {
-		roles, roleErr := s.store.ListUserRoles(r.Context(), user.ID)
+		state, roleErr := s.store.GetGlobalRoleState(r.Context(), user.ID)
 		if roleErr != nil {
 			s.logger.Warn("list roles for user", zap.Error(roleErr), zap.String("user_id", user.ID.String()))
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
-		resp = append(resp, userResponseFromModel(user, roles))
+		resp = append(resp, userResponseFromModel(user, state))
 	}
 
 	payload := paginatedResponse[userResponse]{
@@ -1605,7 +1621,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 		return
 	}
 
@@ -1620,7 +1636,7 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request, userID uu
 		return
 	}
 
-	roles, err := s.store.ListUserRoles(r.Context(), user.ID)
+	state, err := s.store.GetGlobalRoleState(r.Context(), user.ID)
 	if err != nil {
 		s.logger.Error("list user roles", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1628,13 +1644,13 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request, userID uu
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(userResponseFromModel(*user, roles)); err != nil {
+	if err := json.NewEncoder(w).Encode(userResponseFromModel(*user, state)); err != nil {
 		s.logger.Warn("encode user response", zap.Error(err))
 	}
 }
 
 func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
-	principal, ok := s.authorize(w, r, roleAdmin)
+	principal, ok := s.authorizeGlobalRoleAdmin(w, r)
 	if !ok {
 		return
 	}
@@ -1652,7 +1668,19 @@ func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	if err := s.store.SetUserRoles(r.Context(), userID, req.Roles); err != nil {
+	if err := s.store.ReplaceGlobalRolesAuthorized(r.Context(), principalStorageUserID(s, r.Context(), principal), userID, req.ExpectedRevision, req.Roles); err != nil {
+		if errors.Is(err, storage.ErrGovernanceConflict) {
+			http.Error(w, "Global roles changed. Cancel, refresh the directory and review the current roles before saving again.", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, storage.ErrGlobalRoleAuthority) {
+			http.Error(w, "Current global administrator authority is required; refresh your access before retrying.", http.StatusForbidden)
+			return
+		}
+		if errors.Is(err, storage.ErrRoleSourceReviewRequired) {
+			http.Error(w, "This editor cannot replace unreviewed or independently managed role sources. Review the grant origins and use source-specific actions.", http.StatusConflict)
+			return
+		}
 		s.logger.Error("set user roles", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
@@ -1669,7 +1697,7 @@ func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	roles, err := s.store.ListUserRoles(r.Context(), userID)
+	state, err := s.store.GetGlobalRoleState(r.Context(), userID)
 	if err != nil {
 		s.logger.Error("list user roles after update", zap.Error(err))
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -1677,12 +1705,13 @@ func (s *Server) handleUpdateUserRoles(w http.ResponseWriter, r *http.Request, u
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(userResponseFromModel(*user, roles)); err != nil {
+	if err := json.NewEncoder(w).Encode(userResponseFromModel(*user, state)); err != nil {
 		s.logger.Warn("encode updated user response", zap.Error(err))
 	}
 
 	s.recordAudit(r.Context(), principal, uuid.Nil, "user.roles.update", "user", userID.String(), map[string]any{
-		"roles": roles,
+		"roles":         state.Roles,
+		"role_revision": state.Revision,
 	})
 }
 
@@ -1698,7 +1727,7 @@ func (s *Server) handleRolesCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.authorize(w, r, roleAdmin); !ok {
+	if _, ok := s.authorizeGlobalRoleAdmin(w, r); !ok {
 		return
 	}
 
@@ -1733,22 +1762,26 @@ type profileResponse struct {
 }
 
 type userResponse struct {
-	ID          string   `json:"id"`
-	ExternalID  string   `json:"external_id"`
-	DisplayName *string  `json:"display_name,omitempty"`
-	Email       *string  `json:"email,omitempty"`
-	Roles       []string `json:"roles"`
-	CreatedAt   string   `json:"created_at"`
+	ID           string   `json:"id"`
+	ExternalID   string   `json:"external_id"`
+	DisplayName  *string  `json:"display_name,omitempty"`
+	Email        *string  `json:"email,omitempty"`
+	Roles        []string `json:"roles"`
+	RoleScope    string   `json:"role_scope"`
+	RoleRevision string   `json:"role_revision"`
+	CreatedAt    string   `json:"created_at"`
 }
 
-func userResponseFromModel(u storage.User, roles []string) userResponse {
+func userResponseFromModel(u storage.User, state storage.GlobalRoleState) userResponse {
 	return userResponse{
-		ID:          u.ID.String(),
-		ExternalID:  u.ExternalID,
-		DisplayName: nullStringPtr(u.DisplayName),
-		Email:       nullStringPtr(u.Email),
-		Roles:       uniqueRoleNames(roles),
-		CreatedAt:   u.CreatedAt.UTC().Format(time.RFC3339),
+		ID:           u.ID.String(),
+		ExternalID:   u.ExternalID,
+		DisplayName:  nullStringPtr(u.DisplayName),
+		Email:        nullStringPtr(u.Email),
+		Roles:        uniqueRoleNames(state.Roles),
+		RoleRevision: state.Revision,
+		RoleScope:    "global",
+		CreatedAt:    u.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
@@ -1792,10 +1825,18 @@ func roleResponseFromModel(role storage.Role) roleResponse {
 }
 
 type updateUserRolesRequest struct {
-	Roles []string `json:"roles"`
+	Roles            []string `json:"roles"`
+	RoleScope        string   `json:"role_scope"`
+	ExpectedRevision string   `json:"expected_revision"`
 }
 
 func (r updateUserRolesRequest) validate() error {
+	if r.RoleScope != "global" {
+		return fmt.Errorf("role_scope must explicitly be global; tenant assignments use tenant role controls")
+	}
+	if r.ExpectedRevision == "" {
+		return fmt.Errorf("expected_revision is required; reload current global roles")
+	}
 	if len(r.Roles) == 0 {
 		return fmt.Errorf("roles are required")
 	}
@@ -3338,6 +3379,9 @@ func New(logger *zap.Logger, cfg *config.Config, store Store, worker TaskQueue) 
 			logger.Error("init ldap provider", zap.Error(err))
 		} else {
 			s.ldapProvider = p
+			if roleStore, ok := store.(auth.LDAPSessionRoleStore); ok {
+				authMW.SetLDAPSessionVerifier(auth.NewLDAPSessionVerifier(p, roleStore))
+			}
 		}
 	}
 
@@ -3369,7 +3413,9 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the HTTP server and compliance scheduler.
 func (s *Server) Stop(ctx context.Context) error {
-	if s.patchReviewStop!=nil{s.patchReviewStop()}
+	if s.patchReviewStop != nil {
+		s.patchReviewStop()
+	}
 	s.stopLogDumpMaintenance()
 	if s.webhookBridge != nil {
 		s.webhookBridge.Stop()

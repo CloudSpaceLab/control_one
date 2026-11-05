@@ -2,7 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -24,12 +26,13 @@ const (
 
 // Principal captures the caller identity.
 type Principal struct {
-	Type    string
-	Name    string
-	Subject string
-	Email   string
-	Roles   []string
-	Groups  []string
+	authenticationAuthority string
+	Type                    string
+	Name                    string
+	Subject                 string
+	Email                   string
+	Roles                   []string
+	Groups                  []string
 }
 
 // PrincipalFromContext extracts the authenticated principal from request context.
@@ -44,6 +47,8 @@ func PrincipalFromContext(ctx context.Context) (*Principal, bool) {
 	return nil, false
 }
 
+var ErrLDAPSessionRecheck = errors.New("directory session recheck failed")
+
 // Middleware performs basic authentication checks for incoming HTTP requests.
 type Middleware struct {
 	log              *zap.Logger
@@ -55,7 +60,8 @@ type Middleware struct {
 	oidcInitErr error
 	oidc        *OIDCProvider
 
-	store IdentityStore
+	store               IdentityStore
+	ldapSessionVerifier func(context.Context, *storage.LocalUser) ([]string, error)
 }
 
 // IdentityStore captures the persistence operations required by the middleware.
@@ -106,6 +112,11 @@ func NewMiddleware(log *zap.Logger, requireClientTLS bool, authCfg config.AuthCo
 	}
 }
 
+// SetLDAPSessionVerifier configures the mandatory fresh directory check for LDAP sessions.
+func (m *Middleware) SetLDAPSessionVerifier(check func(context.Context, *storage.LocalUser) ([]string, error)) {
+	m.ldapSessionVerifier = check
+}
+
 // Wrap decorates the provided handler with authentication.
 func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +139,12 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 				zap.String("path", r.URL.Path),
 				zap.Error(err),
 			)
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			if errors.Is(err, ErrLDAPSessionRecheck) {
+				w.Header().Set("X-ControlOne-Auth-Reason", "directory_verification_required")
+				http.Error(w, "Directory access changed or could not be verified. Sign in again or contact your administrator.", http.StatusUnauthorized)
+			} else {
+				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+			}
 			return
 		}
 
@@ -216,7 +232,21 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 			// 1. Try login session token first — local + LDAP users.
 			if m.store != nil {
 				if sess, u, err := m.store.ValidateSessionToken(r.Context(), token); err == nil && sess != nil && u != nil {
-					roles, _ := m.store.ListUserRoles(r.Context(), u.ID)
+					var roles []string
+					if u.AuthProvider == storage.AuthProviderLDAP {
+						if m.ldapSessionVerifier == nil {
+							return nil, fmt.Errorf("%w: verifier unavailable", ErrLDAPSessionRecheck)
+						}
+						roles, err = m.ldapSessionVerifier(r.Context(), u)
+						if err != nil {
+							return nil, fmt.Errorf("%w: %v", ErrLDAPSessionRecheck, err)
+						}
+					} else {
+						roles, err = m.store.ListUserRoles(r.Context(), u.ID)
+						if err != nil {
+							return nil, err
+						}
+					}
 					return &Principal{
 						Type:    "user",
 						Name:    u.DisplayName,
@@ -228,7 +258,7 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 			}
 			// 2. Static admin/operator tokens from config.
 			if principal, ok := m.staticPrincipal(token); ok {
-				return m.persistPrincipal(r.Context(), principal), nil
+				return m.persistPrincipal(r.Context(), principal)
 			}
 			if m.authCfg.OIDC.Enabled {
 				provider, err := m.ensureOIDCProvider(r.Context())
@@ -239,8 +269,7 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 				if err != nil {
 					return nil, err
 				}
-				principal = m.persistPrincipal(r.Context(), principal)
-				return principal, nil
+				return m.persistPrincipal(r.Context(), principal)
 			}
 			// Reject opaque bearer tokens when OIDC is disabled and no static token matched.
 			return nil, http.ErrNoCookie
@@ -312,34 +341,34 @@ func (m *Middleware) defaultRole() string {
 	return role
 }
 
-func (m *Middleware) persistPrincipal(ctx context.Context, principal *Principal) *Principal {
-	if principal == nil || m.store == nil {
-		return principal
+func (m *Middleware) persistPrincipal(ctx context.Context, principal *Principal) (*Principal, error) {
+	if principal == nil || principal.Subject == "" {
+		return nil, errors.New("authenticated subject required")
 	}
-	if principal.Subject == "" {
-		return principal
-	}
-
-	user, err := m.store.EnsureUser(ctx, principal.Subject, principal.Email, principal.Name)
-	if err != nil {
-		m.log.Warn("ensure user failed", zap.Error(err))
-		return principal
+	if m.store == nil {
+		return nil, errors.New("authentication persistence unavailable")
 	}
 
+	reconciler, ok := m.store.(interface {
+		PersistAuthenticationRoles(context.Context, string, string, string, string, []string) (*storage.User, []string, error)
+	})
+	if !ok {
+		return nil, errors.New("source-aware authentication persistence unavailable")
+	}
 	roles := principal.Roles
 	if len(roles) == 0 {
 		roles = []string{m.defaultRole()}
 	}
-	if err := m.store.AssignRolesToUser(ctx, user.ID, roles); err != nil {
-		m.log.Warn("assign roles failed", zap.Error(err), zap.Strings("roles", roles))
-		return principal
-	}
-
-	storedRoles, err := m.store.ListUserRoles(ctx, user.ID)
+	user, storedRoles, err := reconciler.PersistAuthenticationRoles(ctx, principal.authenticationAuthority, principal.Subject, principal.Email, principal.Name, roles)
 	if err != nil {
-		m.log.Warn("list user roles failed", zap.Error(err))
-		return principal
+		return nil, fmt.Errorf("persist authenticated grants: %w", err)
 	}
+	if user == nil {
+		return nil, errors.New("authenticated identity unavailable")
+	}
+	principal.Subject = user.ExternalID
+
+	principal.Roles = nil // An empty effective grant set must not retain claim authority.
 	if len(storedRoles) > 0 {
 		// Dedupe — ListUserRoles may surface the same role twice (e.g.
 		// global "admin" + tenant-scoped "admin"). The downstream RBAC
@@ -356,7 +385,7 @@ func (m *Middleware) persistPrincipal(ctx context.Context, principal *Principal)
 		}
 		principal.Roles = uniq
 	}
-	return principal
+	return principal, nil
 }
 
 func (m *Middleware) staticPrincipal(token string) (*Principal, bool) {
@@ -371,7 +400,7 @@ func (m *Middleware) staticPrincipal(token string) (*Principal, bool) {
 
 	subject := strings.TrimSpace(cfg.Subject)
 	if subject == "" {
-		subject = token
+		subject = fmt.Sprintf("static-token:%x", sha256.Sum256([]byte(token)))
 	}
 
 	name := strings.TrimSpace(cfg.Name)
@@ -386,12 +415,13 @@ func (m *Middleware) staticPrincipal(token string) (*Principal, bool) {
 
 	groups := sanitizeStringsLocal(cfg.Groups)
 	principal := &Principal{
-		Type:    "user",
-		Name:    name,
-		Subject: subject,
-		Email:   strings.TrimSpace(cfg.Email),
-		Roles:   roles,
-		Groups:  groups,
+		authenticationAuthority: "static",
+		Type:                    "user",
+		Name:                    name,
+		Subject:                 subject,
+		Email:                   strings.TrimSpace(cfg.Email),
+		Roles:                   roles,
+		Groups:                  groups,
 	}
 
 	return principal, true

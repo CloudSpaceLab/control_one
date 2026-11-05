@@ -283,6 +283,17 @@ func TestAutomationScheduledAtomicDispatchDedicatedPostgres(t *testing.T) {
 	}
 	require.NotEqual(t, uuid.Nil, job)
 	require.NoError(t, s.CheckPatchAutomationExecution(ctx, f.tenant, r.ID, job))
+	var originalProvider string
+	require.NoError(t, s.db.QueryRowContext(ctx, `SELECT auth_provider FROM users WHERE id=$1`, f.actor).Scan(&originalProvider))
+	_, e = s.db.ExecContext(ctx, `UPDATE users SET auth_provider='ldap' WHERE id=$1`, f.actor)
+	require.NoError(t, e)
+	require.ErrorContains(t, s.CheckPatchAutomationExecution(ctx, f.tenant, r.ID, job), "directory-backed scheduling authority")
+	_, e = s.db.ExecContext(ctx, `UPDATE users SET auth_provider=$2, disabled_at=NOW() WHERE id=$1`, f.actor, originalProvider)
+	require.NoError(t, e)
+	require.ErrorContains(t, s.CheckPatchAutomationExecution(ctx, f.tenant, r.ID, job), "current scheduling authority unavailable")
+	_, e = s.db.ExecContext(ctx, `UPDATE users SET disabled_at=NULL WHERE id=$1`, f.actor)
+	require.NoError(t, e)
+	require.NoError(t, s.CheckPatchAutomationExecution(ctx, f.tenant, r.ID, job))
 	f.policy.Policy.Automation.Enabled = false
 	_, e = s.SavePatchReviewOperations(ctx, f.tenant, f.policy.Revision, f.policy.Policy, f.actor.String())
 	require.NoError(t, e)
@@ -291,7 +302,7 @@ func TestAutomationScheduledAtomicDispatchDedicatedPostgres(t *testing.T) {
 func TestAutomationScheduledRejectionsDedicatedPostgres(t *testing.T) {
 	s := phase2SnapshotTestStore(t)
 	ctx := context.Background()
-	for _, scenario := range []string{"not_due", "cancelled", "expired", "policy_changed", "unknown_health", "stale_health", "changed_feed", "closed_window", "revoked_role", "stripped_run", "automatic_canary"} {
+	for _, scenario := range []string{"not_due", "cancelled", "expired", "policy_changed", "unknown_health", "stale_health", "changed_feed", "closed_window", "revoked_role", "directory_actor", "disabled_actor", "stripped_run", "automatic_canary"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := makeAutomationFixture(t, s)
 			if scenario == "automatic_canary" {
@@ -330,11 +341,20 @@ func TestAutomationScheduledRejectionsDedicatedPostgres(t *testing.T) {
 				require.NoError(t, e)
 			case "revoked_role":
 				require.NoError(t, s.SetUserRoles(ctx, f.actor, []string{}))
+			case "directory_actor":
+				_, e := s.db.ExecContext(ctx, `UPDATE users SET auth_provider='ldap' WHERE id=$1`, f.actor)
+				require.NoError(t, e)
+			case "disabled_actor":
+				_, e := s.db.ExecContext(ctx, `UPDATE users SET disabled_at=NOW() WHERE id=$1`, f.actor)
+				require.NoError(t, e)
 			case "stripped_run":
 				p.Payload = f.params.Payload
 			}
 			_, e := s.DispatchPatchJob(ctx, p)
 			require.Error(t, e)
+			if scenario == "directory_actor" {
+				require.ErrorContains(t, e, "directory-backed scheduling authority")
+			}
 			var jobs int
 			require.NoError(t, s.db.QueryRowContext(ctx, `SELECT count(*) FROM jobs WHERE tenant_id=$1`, f.tenant).Scan(&jobs))
 			require.Zero(t, jobs)

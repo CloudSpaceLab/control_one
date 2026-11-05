@@ -1,7 +1,7 @@
 const env = import.meta.env;
 
 const defaultRedirect =
-  typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : '/auth/callback';
+  typeof window !== 'undefined' ? `${window.location.origin}/console/auth/callback` : '/console/auth/callback';
 
 export interface OIDCConfig {
   enabled: boolean;

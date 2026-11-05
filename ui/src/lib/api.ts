@@ -1,3 +1,5 @@
+import type {TenantRoleChange,TenantRoleResponse} from '@/features/patch-management/tenantRoleTypes';
+import type {OrganizationPolicy,OrganizationPolicyRecord,OrganizationPolicyResponse} from '@/features/patch-management/organizationTypes';
 import type {PatchReviewResponse,PatchReviewPolicy,PatchReviewPolicyRecord,PatchPriorityInput,PatchPriorityDecision,PatchFindingTracking} from '@/features/patch-management/reviewTypes';
 import type {PatchOperationsResponse,PatchReviewOperationsPolicy,PatchRetentionPreview} from '@/features/patch-management/operationsTypes';
 // Use the same-origin Vite /api proxy in local development as well as in
@@ -1700,12 +1702,21 @@ export interface Profile {
   user?: ProfileUserDetails;
 }
 
+export interface GlobalRoleSourceEvidence {
+  administrator_changes_available?: boolean;
+  revision: string;
+  effective_roles: string[];
+  grants: {assignment_id: string; role: string; source: string; expires_at: string | null}[];
+}
+
 export interface User {
   id: string;
   external_id: string;
   display_name?: string;
   email?: string;
   roles: string[];
+  role_scope?: 'global';
+  role_revision?: string;
   created_at: string;
 }
 
@@ -1724,6 +1735,7 @@ export interface ListUsersParams {
 
 export interface UpdateUserRolesPayload {
   roles: string[];
+  expected_revision: string;
 }
 
 export type JobStatus =
@@ -2697,11 +2709,13 @@ export interface DownloadedFile {
 
 export class APIError extends Error {
   public readonly status: number;
+  public readonly authReason?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, authReason?: string) {
     super(message);
     this.name = "APIError";
     this.status = status;
+    this.authReason = authReason;
   }
 }
 
@@ -2739,7 +2753,7 @@ export class APIClient {
 
   private readonly baseUrl: string;
   private token: string | null | undefined;
-  private unauthorizedHandler?: () => void;
+  private unauthorizedHandler?: (reason?: string | null) => void;
 
   constructor({ baseUrl, token }: APIClientOptions = {}) {
     const configured =
@@ -2769,7 +2783,7 @@ export class APIClient {
     this.token = token;
   }
 
-  onUnauthorized(handler?: () => void): void {
+  onUnauthorized(handler?: (reason?: string | null) => void): void {
     this.unauthorizedHandler = handler;
   }
 
@@ -3516,6 +3530,18 @@ export class APIClient {
     };
   }
 
+  async getGlobalRoleSources(userID: string): Promise<GlobalRoleSourceEvidence> {
+    return this.request<GlobalRoleSourceEvidence>(`/api/v1/users/${encodeURIComponent(userID)}/role-sources`);
+  }
+
+  async changeAdministratorRoleSource(userID: string, body: {assignment_id: string; expected_revision: string; reason: string; action: 'set_expiry' | 'revoke'; expires_at?: string}): Promise<GlobalRoleSourceEvidence> {
+    return this.request<GlobalRoleSourceEvidence>(`/api/v1/users/${encodeURIComponent(userID)}/role-sources`, {method: 'POST', body: JSON.stringify(body)});
+  }
+
+  async reviewGlobalRoleSource(userID: string, body: {assignment_id: string; expected_revision: string; reason: string}): Promise<GlobalRoleSourceEvidence> {
+    return this.request<GlobalRoleSourceEvidence>(`/api/v1/users/${encodeURIComponent(userID)}/role-sources`, {method: 'POST', body: JSON.stringify(body)});
+  }
+
   async getUser(userID: string): Promise<User> {
     const encoded = encodeURIComponent(userID);
     return this.request<User>(`/api/v1/users/${encoded}`);
@@ -3528,7 +3554,7 @@ export class APIClient {
     const encoded = encodeURIComponent(userID);
     return this.request<User>(`/api/v1/users/${encoded}`, {
       method: "PATCH",
-      body: JSON.stringify(payload),
+      body: JSON.stringify({...payload, role_scope: 'global'}),
     });
   }
 
@@ -4952,6 +4978,10 @@ export class APIClient {
     );
   }
 
+  async getPatchOrganizationPolicy(tenantId:string):Promise<OrganizationPolicyResponse>{return this.request(`/api/v1/patch/organization-policy?tenant_id=${encodeURIComponent(tenantId)}`);}
+  async getTenantRoleControls(tenantId:string):Promise<TenantRoleResponse>{return this.request(`/api/v1/tenant-role-controls?tenant_id=${encodeURIComponent(tenantId)}`);}
+  async saveTenantRoleControl(tenantId:string,change:TenantRoleChange):Promise<{saved:boolean;global_assignments_changed:false}>{return this.request(`/api/v1/tenant-role-controls?tenant_id=${encodeURIComponent(tenantId)}`,{method:'POST',body:JSON.stringify(change)});}
+  async savePatchOrganizationPolicy(tenantId:string,expectedRevision:number,action:string,policy:OrganizationPolicy):Promise<OrganizationPolicyRecord>{return this.request(`/api/v1/patch/organization-policy?tenant_id=${encodeURIComponent(tenantId)}`,{method:'POST',body:JSON.stringify({expected_revision:expectedRevision,action,policy})});}
   async getPatchReviews(tenantId:string,exportEvidence=false,page?:{cursor?:string;historyCursor?:number;limit?:number}):Promise<PatchReviewResponse>{
     const query=new URLSearchParams({tenant_id:tenantId});if(exportEvidence)query.set('action','export');if(page?.cursor)query.set('cursor',page.cursor);if(page?.historyCursor)query.set('history_cursor',String(page.historyCursor));if(page?.limit)query.set('limit',String(page.limit));
     return this.request(`/api/v1/patch/reviews?${query}`);
@@ -5728,12 +5758,13 @@ export class APIClient {
         response.status === HTTP_STATUS_UNAUTHORIZED &&
         this.unauthorizedHandler
       ) {
-        this.unauthorizedHandler();
+        this.unauthorizedHandler(response.headers.get("X-ControlOne-Auth-Reason"));
       }
       const message = await safeErrorMessage(response);
       throw new APIError(
         message || `Request failed with status ${response.status}`,
         response.status,
+        response.headers.get("X-ControlOne-Auth-Reason") ?? undefined,
       );
     }
 
@@ -5760,12 +5791,13 @@ export class APIClient {
         invalidateSessionOnUnauthorized && response.status === HTTP_STATUS_UNAUTHORIZED &&
         this.unauthorizedHandler
       ) {
-        this.unauthorizedHandler();
+        this.unauthorizedHandler(response.headers.get("X-ControlOne-Auth-Reason"));
       }
       const message = await safeErrorMessage(response);
       throw new APIError(
         message || `Download failed with status ${response.status}`,
         response.status,
+        response.headers.get("X-ControlOne-Auth-Reason") ?? undefined,
       );
     }
 
@@ -6265,8 +6297,8 @@ export class APIClient {
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
     const res = await fetch(url, { method: "POST", headers, body: formData });
     if (res.status === HTTP_STATUS_UNAUTHORIZED) {
-      this.unauthorizedHandler?.();
-      throw new APIError("Unauthorized", res.status);
+      this.unauthorizedHandler?.(res.headers.get("X-ControlOne-Auth-Reason"));
+      throw new APIError("Unauthorized", res.status, res.headers.get("X-ControlOne-Auth-Reason") ?? undefined);
     }
     if (!res.ok) {
       const msg = await safeErrorMessage(res);

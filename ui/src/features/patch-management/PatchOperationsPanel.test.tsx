@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({ getPatchAutomationRuns: vi.fn(), listPatchApprov
 vi.mock('@/hooks/useApiClient', () => ({ useApiClient: () => api }));
 const fixture = (): PatchOperationsResponse => ({ operations: { revision: 2, updated_by: 'admin', updated_at: new Date().toISOString(), policy: { owner: 'Lab operations', reason: 'Local qualification', retention: { mode: 'retain', days: 90, legal_hold: true }, notifications: { enabled: false, channel: 'in_app', recipients: [], repeat_hours: 24 }, automation: { mode: 'recommend_only', enabled: false, node_ids: [], canary_node_ids: [], packages: [], exclusions: [], window_id: '', transport: '', max_wave_size: 1, health_profile: '', require_approval: true, require_exact_plan: true, require_fresh_assessment: true, require_health: true, require_reboot_verification: true, stop_on_failure: true } } }, recipients: [{ id: 'current-user', name: 'Lab operator' }], delivery: { delivered: 0, last_error: '' }, can_manage: true, current_user_id: 'current-user', effective_installation_mode: 'recommend_only', installation_activation_available: false, notification_channel: 'in_app', external_delivery_available: false });
 beforeEach(() => { vi.resetAllMocks(); api.getPatchAutomationRuns.mockResolvedValue({runs:[],limit:100}); api.listPatchApprovals.mockResolvedValue({data:[]}); api.getPatchReviewOperations.mockResolvedValue(fixture()); api.listMaintenanceWindows.mockResolvedValue({ windows: [] }); api.listNodes.mockResolvedValue({ data: [] }); api.savePatchReviewOperations.mockResolvedValue(fixture().operations); });
+it('shows saved controls to a read-only reviewer without requesting editing dependencies',async()=>{api.getPatchReviewOperations.mockResolvedValue({...fixture(),can_manage:false});api.listNodes.mockRejectedValue(new Error('No node editing access'));api.listMaintenanceWindows.mockRejectedValue(new Error('No calendar editing access'));render(<PatchOperationsPanel tenantId="lab"/>);expect(await screen.findByText('Saved operational controls — read only')).toBeVisible();expect(api.listNodes).not.toHaveBeenCalled();expect(api.listMaintenanceWindows).not.toHaveBeenCalled();expect(screen.queryByRole('button',{name:'Save operational controls'})).not.toBeInTheDocument();});
 it('saves explicit self-only in-app notification scope without enabling installations', async () => {
     const user = userEvent.setup();
     render(<PatchOperationsPanel tenantId="lab"/>);
@@ -60,7 +61,8 @@ it('does not offer privileged writes to a tenant viewer', async () => {
     f.can_manage = false;
     api.getPatchReviewOperations.mockResolvedValue(f);
     render(<PatchOperationsPanel tenantId="lab"/>);
-    expect(await screen.findByRole('button', { name: 'Save operational controls' })).toBeDisabled();
+    expect(await screen.findByText('Saved operational controls — read only')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Save operational controls' })).not.toBeInTheDocument();
 });
 
 it('stops an enabled installation policy even when its stored draft expiry has passed',async()=>{

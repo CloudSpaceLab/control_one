@@ -132,6 +132,7 @@ func main() {
 			Password:    acc.Password,
 			Provider:    storage.AuthProviderLocal,
 			Roles:       []string{acc.Role},
+			RoleSource:  "provisioning",
 		})
 		if err != nil {
 			logger.Error("seed account", zap.String("email", acc.Email), zap.Error(err))

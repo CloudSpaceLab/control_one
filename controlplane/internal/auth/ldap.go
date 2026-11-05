@@ -16,6 +16,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -162,6 +163,14 @@ func (p *LDAPProvider) Authenticate(ctx context.Context, login, password string)
 	// Group lookup. Optional: when GroupBaseDN is empty we just attach
 	// the default role.
 	if p.cfg.GroupBaseDN != "" {
+		// Authentication has succeeded as the user. Search groups using the
+		// configured service identity when available, so directory ACLs do not
+		// require every user to enumerate membership themselves.
+		if p.cfg.BindDN != "" {
+			if err := conn.Bind(p.cfg.BindDN, p.cfg.BindPassword); err != nil {
+				return nil, fmt.Errorf("ldap service rebind for group search: %w", err)
+			}
+		}
 		groupFilter := substituteAll(p.cfg.GroupFilter, ldap.EscapeFilter(entry.DN))
 		gres, err := conn.Search(ldap.NewSearchRequest(
 			p.cfg.GroupBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
@@ -171,7 +180,7 @@ func (p *LDAPProvider) Authenticate(ctx context.Context, login, password string)
 			nil,
 		))
 		if err != nil {
-			p.log.Warn("ldap group search failed; using default role", zap.Error(err))
+			return nil, fmt.Errorf("ldap group search: %w", err)
 		} else {
 			for _, g := range gres.Entries {
 				name := g.GetAttributeValue(p.cfg.GroupAttr)
@@ -211,7 +220,7 @@ func (p *LDAPProvider) mapGroupsToRoles(groups []string) []string {
 
 func (p *LDAPProvider) dial() (*ldap.Conn, error) {
 	tlsCfg := &tls.Config{InsecureSkipVerify: p.cfg.SkipVerify}
-	conn, err := ldap.DialURL(p.cfg.URL, ldap.DialWithTLSConfig(tlsCfg))
+	conn, err := ldap.DialURL(p.cfg.URL, ldap.DialWithTLSConfig(tlsCfg), ldap.DialWithDialer(&net.Dialer{Timeout: p.cfg.Timeout}))
 	if err != nil {
 		return nil, err
 	}
@@ -239,3 +248,48 @@ var (
 	ErrLDAPUnknownUser        = errors.New("ldap: unknown user")
 	ErrLDAPInvalidCredentials = errors.New("ldap: invalid credentials")
 )
+
+// ReadSessionRoles rechecks a signed-in account using the directory's service
+// identity. It never relies on stored user passwords and fails closed if the
+// service identity, user or group search is unavailable or ambiguous.
+func (p *LDAPProvider) ReadSessionRoles(ctx context.Context, email string) ([]string, error) {
+	email = strings.TrimSpace(email)
+	if email == "" || p.cfg.BindDN == "" || p.cfg.BindPassword == "" {
+		return nil, errors.New("LDAP session verification requires a service identity and account email")
+	}
+	conn, err := p.dial()
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetTimeout(p.cfg.Timeout)
+	if err = conn.Bind(p.cfg.BindDN, p.cfg.BindPassword); err != nil {
+		return nil, fmt.Errorf("LDAP session service bind: %w", err)
+	}
+	filter := substituteAll(p.cfg.UserFilter, ldap.EscapeFilter(email))
+	result, err := conn.Search(ldap.NewSearchRequest(p.cfg.UserBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, int(p.cfg.Timeout/time.Second), false, filter, []string{p.cfg.EmailAttr}, nil))
+	if err != nil {
+		return nil, fmt.Errorf("LDAP session user search: %w", err)
+	}
+	if len(result.Entries) != 1 || !strings.EqualFold(strings.TrimSpace(result.Entries[0].GetAttributeValue(p.cfg.EmailAttr)), email) {
+		return nil, errors.New("LDAP session identity unavailable or ambiguous")
+	}
+	var groups []string
+	if p.cfg.GroupBaseDN != "" {
+		filter = substituteAll(p.cfg.GroupFilter, ldap.EscapeFilter(result.Entries[0].DN))
+		result, err = conn.Search(ldap.NewSearchRequest(p.cfg.GroupBaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, int(p.cfg.Timeout/time.Second), false, filter, []string{p.cfg.GroupAttr}, nil))
+		if err != nil {
+			return nil, fmt.Errorf("LDAP session group search: %w", err)
+		}
+		for _, entry := range result.Entries {
+			if group := entry.GetAttributeValue(p.cfg.GroupAttr); group != "" {
+				groups = append(groups, group)
+			}
+		}
+	}
+	roles := p.mapGroupsToRoles(groups)
+	if len(roles) == 0 {
+		roles = []string{p.cfg.DefaultRole}
+	}
+	return roles, nil
+}

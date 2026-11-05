@@ -193,6 +193,9 @@ func (s *Store) WritePatchReviewExport(ctx context.Context, tenant uuid.UUID, w 
 		{"approval_history", `SELECT jsonb_build_object('id',id,'deployment_id',deployment_id,'node_id',node_id,'mode',mode,'status',status,'created_at',created_at,'expires_at',expires_at,'approved_at',approved_at,'approved_by',approved_by,'policy_hash',policy_hash) FROM patch_approvals WHERE tenant_id=$1 ORDER BY created_at,id`, []any{tenant}},
 		{"escalation_receipts", `SELECT row_to_json(e) FROM patch_review_escalation_receipts e WHERE tenant_id=$1 ORDER BY created_at,finding_id,recipient_id`, []any{tenant}},
 		{"automation_runs", `SELECT row_to_json(r) FROM patch_automation_runs r WHERE tenant_id=$1 ORDER BY created_at,id`, []any{tenant}},
+		{"organization_policy", `SELECT row_to_json(p) FROM patch_organization_policy p WHERE tenant_id=$1`, []any{tenant}},
+		{"organization_history", `SELECT row_to_json(h) FROM patch_organization_history h WHERE tenant_id=$1 ORDER BY revision`, []any{tenant}},
+		{"organization_approval_bindings",`SELECT row_to_json(b) FROM patch_organization_approval_bindings b WHERE tenant_id=$1 ORDER BY created_at,approval_id`,[]any{tenant}},
 	}
 	for _, section := range sections {
 		if _, err = io.WriteString(w, `,"`+section.name+`":[`); err != nil {

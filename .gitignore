@@ -68,3 +68,7 @@ completion-plan.md
 scripts/test_login.spec.ts
 .pnpm-store/
 .tmp-go-cache/
+
+# Public developer configuration templates only; working files remain ignored.
+!/ui/.env.example
+!/ui/.env.sso-lab.example

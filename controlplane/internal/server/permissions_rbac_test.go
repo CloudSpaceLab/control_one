@@ -1,16 +1,24 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/auth"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
+type globalRBACCatalogTestStore struct{ *fakeStore }
+
+func (*globalRBACCatalogTestStore) HasCurrentGlobalAdmin(context.Context, uuid.UUID) (bool, error) {
+	return true, nil
+}
+
 func TestRBACCatalogIsAdminOnly(t *testing.T) {
-	srv := &Server{store: &fakeStore{}, logger: zap.NewNop()}
+	srv := &Server{store: &globalRBACCatalogTestStore{fakeStore: &fakeStore{}}, logger: zap.NewNop()}
 
 	tests := []struct {
 		name  string

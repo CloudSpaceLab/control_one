@@ -27,14 +27,16 @@ function OperationsWorkspace({ tenantId }: {
     const [verified, setVerified] = useState(false);
     const [confirm, setConfirm] = useState(false);
 	const [confirmActivation,setConfirmActivation]=useState(false);
-    useEffect(() => { alive.current = true; let cancelled = false; Promise.all([api.getPatchReviewOperations(tenantId), api.listMaintenanceWindows(tenantId), (async () => { const all: NodeSummary[] = []; let offset = 0; for (;;) {
+    useEffect(() => { alive.current = true; let cancelled = false; api.getPatchReviewOperations(tenantId).then(async result=>{
+        if(!result.can_manage){if(!cancelled){setData(result);setPolicy(result.operations.policy);}return;}
+        const [calendar,machines]=await Promise.all([api.listMaintenanceWindows(tenantId), (async () => { const all: NodeSummary[] = []; let offset = 0; for (;;) {
             const page = await api.listNodes({ tenantId, limit: 500, offset });
             all.push(...page.data);
             const next = page.pagination?.nextOffset;
             if (next == null || next <= offset)
                 return all;
             offset = next;
-        } })()]).then(([result, calendar, machines]) => { if (!cancelled) {
+        } })()]); if (!cancelled) {
         setData(result);
         setPolicy(result.operations.policy);
         setWindows(calendar.windows);
@@ -62,6 +64,7 @@ function OperationsWorkspace({ tenantId }: {
     if (!data || !policy)
         return <section aria-label="Patch operational controls"><h2>Operational controls</h2>{error ? <p role="alert">{error}</p> : <p>Loading operational controls…</p>}<Button disabled={busy} onClick={() => void run(reload)}>Retry operational controls</Button></section>;
     const canManage = data.can_manage && !busy;
+    if(!data.can_manage)return <section aria-label="Patch operational controls" className="space-y-3 rounded border border-border p-4"><h2>Saved operational controls — read only</h2><p>Revision {data.operations.revision}. Effective installation mode: {data.effective_installation_mode}. Only tenant administrators can configure these controls.</p><p>Operations owner: {policy.owner}. Reason: {policy.reason}.</p><p>Target IDs: {policy.automation.node_ids.join(', ')||'none'}. Packages: {policy.automation.packages.join(', ')||'none'}.</p><p>Retention: {policy.retention.days} days. Legal hold: {String(policy.retention.legal_hold)}. Notifications enabled: {String(policy.notifications.enabled)}.</p><Button disabled={busy} onClick={()=>void run(reload)}>Reload saved operational controls</Button>{error&&<p role="alert">{error}</p>}</section>;
     const automation = policy.automation;
 	const save=()=>run(async()=>{await api.savePatchReviewOperations(tenantId,data.operations.revision,policy);if(alive.current){await reload();setConfirmActivation(false);setMessage(policy.automation.enabled?'Scoped installation policy saved. Current execution gates still apply.':'Operational controls saved. Installation activation remains disabled.');}});
     return <section aria-label="Patch operational controls" className="space-y-4 rounded border border-border p-4"><h2 className="text-lg font-semibold">Retention, notifications and automation controls</h2>

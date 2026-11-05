@@ -201,3 +201,13 @@ func (c *ctxValueAssertingStore) CreateAuditLog(ctx context.Context, entry *stor
 	c.got <- ctx.Value(c.key)
 	return c.fakeStore.CreateAuditLog(ctx, entry)
 }
+
+func TestRecordAuditResolvesLocalSessionUUID(t *testing.T) {
+	id := uuid.New()
+	store := &fakeStore{usersByID: map[uuid.UUID]*storage.User{id: {ID: id, ExternalID: "existing-admin@local"}}}
+	srv := &Server{logger: zap.NewNop(), store: store}
+	srv.recordAudit(context.Background(), &auth.Principal{Type: "user", Subject: id.String()}, uuid.Nil, "user.roles.update", "user", uuid.NewString(), nil)
+	if len(store.auditLogs) != 1 || store.auditLogs[0].ActorID != id {
+		t.Fatalf("local-session actor must be retained: %+v", store.auditLogs)
+	}
+}
