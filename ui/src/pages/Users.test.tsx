@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Users } from './Users';
 import { APIError } from '../lib/api';
+import { MemoryRouter } from 'react-router-dom';
 
 const mocks = vi.hoisted(() => {
   const reloadUsers = vi.fn();
@@ -35,6 +36,9 @@ const mocks = vi.hoisted(() => {
     users,
     usersError: null as string | null,
     rolesError: null as string | null,
+    usersErrorStatus: null as number | null,
+    rolesErrorStatus: null as number | null,
+    loading: false,
   };
 });
 
@@ -45,8 +49,9 @@ vi.mock('../hooks/useApiClient', () => ({
 vi.mock('../hooks/useUsers', () => ({
   useUsers: () => ({
     data: mocks.users,
-    loading: false,
+    loading: mocks.loading,
     error: mocks.usersError,
+    errorStatus: mocks.usersErrorStatus,
     pagination: { total: mocks.users.length, count: mocks.users.length, limit: 50, offset: 0, nextOffset: null, prevOffset: null },
     reload: mocks.reloadUsers,
   }),
@@ -57,6 +62,7 @@ vi.mock('../hooks/useRoles', () => ({
     data: mocks.roles,
     loading: false,
     error: mocks.rolesError,
+    errorStatus: mocks.rolesErrorStatus,
     reload: mocks.reloadRoles,
   }),
 }));
@@ -80,7 +86,41 @@ describe('Users', () => {
     });
     mocks.usersError = null;
     mocks.rolesError = null;
+    mocks.usersErrorStatus = null;
+    mocks.rolesErrorStatus = null;
+    mocks.loading = false;
     mocks.updateUserRoles.mockResolvedValue({ ...mocks.users[0], roles: ['operator'] });
+  });
+
+  it.each(['users', 'roles'])('shows access denied for %s HTTP 403 without exposing cached data or controls', endpoint => {
+    if (endpoint === 'users') mocks.usersErrorStatus = 403;
+    else mocks.rolesErrorStatus = 403;
+    render(<MemoryRouter><Users /></MemoryRouter>);
+    expect(screen.getByRole('alert')).toHaveTextContent('You don’t have permission to manage users');
+    expect(screen.getByRole('link', {name: 'Return to Control Room'})).toHaveAttribute('href', '/');
+    expect(screen.queryByText('Ada Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('TOTAL USERS')).not.toBeInTheDocument();
+    expect(screen.queryByText('AVAILABLE ROLES')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', {name: /refresh|edit roles|bulk/i})).not.toBeInTheDocument();
+    expect(screen.queryByText('Users could not be loaded')).not.toBeInTheDocument();
+    expect(mocks.updateUserRoles).not.toHaveBeenCalled();
+  });
+
+  it('does not show cached directory data or zero counters while loading', () => {
+    mocks.loading = true;
+    render(<Users />);
+    expect(screen.getByRole('status')).toHaveTextContent('Checking current access');
+    expect(screen.queryByText('Ada Admin')).not.toBeInTheDocument();
+    expect(screen.queryByText('TOTAL USERS')).not.toBeInTheDocument();
+  });
+
+  it('does not classify a server failure as a permission denial', () => {
+    mocks.usersError = 'directory unavailable';
+    mocks.usersErrorStatus = 503;
+    render(<Users />);
+    expect(screen.getByRole('alert')).toHaveTextContent('directory unavailable');
+    expect(screen.queryByText('You don’t have permission to manage users')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Refresh'})).toBeEnabled();
   });
 
   it('deduplicates repeated role assignments in the directory', async () => {

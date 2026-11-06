@@ -108,20 +108,45 @@ func (s *Store) ReplaceGlobalRolesAuthorized(ctx context.Context, actor, target 
 	if managed {
 		return ErrRoleSourceReviewRequired
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM user_roles WHERE user_id=$1 AND tenant_id IS NULL`, target); err != nil {
+	// Re-saving a role list is not authorization to make retained access permanent.
+	selected := append([]string{}, sanitizeRoles(roles)...)
+	before, err := globalRoleAuditSnapshot(ctx, tx, target)
+	if err != nil {
 		return err
 	}
-	for _, name := range sanitizeRoles(roles) {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM user_roles ur USING roles r WHERE ur.role_id=r.id AND ur.user_id=$1 AND ur.tenant_id IS NULL AND NOT(r.name=ANY($2))`, target, pq.Array(selected)); err != nil {
+		return err
+	}
+	for _, name := range selected {
 		var role uuid.UUID
 		if err = tx.QueryRowContext(ctx, `SELECT id FROM roles WHERE name=$1`, name).Scan(&role); err != nil {
 			return fmt.Errorf("existing global role required: %w", err)
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO user_roles(user_id,role_id,tenant_id,assigned_by,expires_at) VALUES($1,$2,NULL,$3,NULL)`, target, role, actor); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO global_role_sources(assignment_id,source) SELECT id,'administrator' FROM user_roles WHERE user_id=$1 AND role_id=$2 AND tenant_id IS NULL`, target, role); err != nil {
+		if err = s.attributeGlobalRole(ctx, tx, target, role, "administrator", actor); err != nil {
 			return err
 		}
 	}
+	// Invalidate other drafts without changing retained assignment actors/deadlines.
+	if _, err = tx.ExecContext(ctx, `UPDATE global_role_sources g SET grant_id=gen_random_uuid() FROM user_roles ur WHERE g.assignment_id=ur.id AND ur.user_id=$1 AND ur.tenant_id IS NULL AND g.source='administrator'`, target); err != nil {
+		return err
+	}
+	if err = projectGlobalRoleSources(ctx, tx, target); err != nil {
+		return err
+	}
+	after, err := globalRoleAuditSnapshot(ctx, tx, target)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO global_role_change_events(actor_id,user_id,reviewed_revision,previous_grants,current_grants) VALUES($1,$2,$3,$4::jsonb,$5::jsonb)`, actor, target, expected, before, after); err != nil {
+		return err
+	}
+
 	return tx.Commit()
+}
+
+// Capture source evidence within the locked role-change transaction.
+func globalRoleAuditSnapshot(ctx context.Context, tx *sql.Tx, user uuid.UUID) (string, error) {
+	var snapshot string
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('assignment_id',ur.id,'role',r.name,'source',COALESCE(g.source,'legacy_unknown'),'expires_at',CASE WHEN g.source IS NULL THEN ur.expires_at ELSE g.expires_at END,'assigned_by',ur.assigned_by) ORDER BY r.name,g.source),'[]'::jsonb)::text FROM user_roles ur JOIN roles r ON r.id=ur.role_id LEFT JOIN global_role_sources g ON g.assignment_id=ur.id WHERE ur.user_id=$1 AND ur.tenant_id IS NULL`, user).Scan(&snapshot)
+	return snapshot, err
 }

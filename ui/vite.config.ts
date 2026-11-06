@@ -2,6 +2,7 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'node:path';
+import { consoleBaseRedirect } from './build/console-base';
 
 export default defineConfig(({ mode }) => {
   // Proxy settings are server-only. Vite does not load .env files into
@@ -11,7 +12,7 @@ export default defineConfig(({ mode }) => {
   const agentPublicURL = process.env.CONTROL_ONE_AGENT_PUBLIC_URL || fileEnv.CONTROL_ONE_AGENT_PUBLIC_URL || 'https://127.0.0.1:18443';
 
   return {
-  plugins: [react(), tailwindcss()],
+  plugins: [consoleBaseRedirect(), react(), tailwindcss()],
   base: '/console/',
   resolve: {
     alias: {

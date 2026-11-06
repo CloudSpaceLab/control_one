@@ -83,6 +83,11 @@ func (s *Store) CreatePatchApproval(ctx context.Context, params CreatePatchAppro
 
 	id := uuid.New()
 	now := s.clock().UTC()
+	var prepErr error
+	ctx, prepErr = s.prepareExecutionAuthority(ctx, params.TenantID, "approval", id.String())
+	if prepErr != nil {
+		return nil, prepErr
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -126,6 +131,9 @@ func (s *Store) CreatePatchApproval(ctx context.Context, params CreatePatchAppro
 		if _, err = tx.ExecContext(ctx, `INSERT INTO patch_organization_approval_bindings(approval_id,tenant_id,organization_revision) VALUES($1,$2,$3)`, approval.ID, params.TenantID, organizationRevision); err != nil {
 			return nil, err
 		}
+	}
+	if err = checkExecutionProofDeadlines(ctx); err != nil {
+		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -56,7 +57,8 @@ type Middleware struct {
 	publicPaths      map[string]struct{}
 
 	authCfg     config.AuthConfig
-	oidcOnce    sync.Once
+	oidcMu      sync.Mutex
+	oidcRetryAt time.Time
 	oidcInitErr error
 	oidc        *OIDCProvider
 
@@ -311,26 +313,30 @@ func (m *Middleware) authenticate(r *http.Request) (*Principal, error) {
 	return nil, http.ErrNoCookie
 }
 
+// Failed discovery must not permanently disable SSO until a process restart.
+// Serialize discovery and briefly back off failures; no unverified principal is returned.
 func (m *Middleware) ensureOIDCProvider(ctx context.Context) (*OIDCProvider, error) {
-	m.oidcOnce.Do(func() {
-		if !m.authCfg.OIDC.Enabled {
-			return
-		}
-		provider, err := NewOIDCProvider(ctx, m.authCfg.OIDC, m.authCfg.RBAC)
-		if err != nil {
-			m.oidcInitErr = err
-			return
-		}
-		m.oidc = provider
-	})
-
-	if m.oidcInitErr != nil {
+	m.oidcMu.Lock()
+	defer m.oidcMu.Unlock()
+	if m.oidc != nil {
+		return m.oidc, nil
+	}
+	if !m.authCfg.OIDC.Enabled {
+		return nil, errors.New("oidc disabled")
+	}
+	if m.oidcInitErr != nil && time.Now().Before(m.oidcRetryAt) {
 		return nil, m.oidcInitErr
 	}
-	if m.oidc == nil {
-		return nil, errors.New("oidc provider not initialized")
+	provider, err := NewOIDCProvider(ctx, m.authCfg.OIDC, m.authCfg.RBAC)
+	if err != nil {
+		m.oidcInitErr = err
+		m.oidcRetryAt = time.Now().Add(5 * time.Second)
+		return nil, err
 	}
-	return m.oidc, nil
+	m.oidc = provider
+	m.oidcInitErr = nil
+	m.oidcRetryAt = time.Time{}
+	return provider, nil
 }
 
 func (m *Middleware) defaultRole() string {

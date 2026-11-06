@@ -53,11 +53,28 @@ func (s *Server) handleAuditCollection(w http.ResponseWriter, r *http.Request) {
 		ResourceType: strings.TrimSpace(r.URL.Query().Get("resource_type")),
 		ResourceID:   strings.TrimSpace(r.URL.Query().Get("resource_id")),
 	}
-	tenantID, ok := s.requireTenantAccessFromQuery(w, r, principal)
-	if !ok {
+	scope := strings.TrimSpace(r.URL.Query().Get("scope"))
+	switch scope {
+	case "global_identity":
+		if r.URL.Query().Get("tenant_id") != "" {
+			http.Error(w, "Global identity scope cannot include a tenant.", 400)
+			return
+		}
+		if _, allowed := s.authorizeGlobalRoleAdmin(w, r); !allowed {
+			return
+		}
+		filter.GlobalIdentity = true
+	case "", "tenant":
+		tenantID, allowed := s.requireTenantAccessFromQuery(w, r, principal)
+		if !allowed {
+			return
+		}
+		filter.TenantID = tenantID
+	default:
+		http.Error(w, "Unsupported audit scope.", 400)
 		return
 	}
-	filter.TenantID = tenantID
+
 	if sinceVal := strings.TrimSpace(r.URL.Query().Get("since")); sinceVal != "" {
 		ts, parseErr := time.Parse(time.RFC3339, sinceVal)
 		if parseErr != nil {

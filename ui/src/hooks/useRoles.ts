@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Role } from '../lib/api';
+import { APIError, Role } from '../lib/api';
 import { useApiClient } from './useApiClient';
 import { useApiErrorHandler } from './useApiErrorHandler';
 
@@ -7,6 +7,7 @@ interface RolesState {
   data: Role[];
   loading: boolean;
   error: string | null;
+  errorStatus: number | null;
 }
 
 interface UseRolesResult extends RolesState {
@@ -20,18 +21,19 @@ export function useRoles(): UseRolesResult {
     data: [],
     loading: true,
     error: null,
+    errorStatus: null,
   });
   const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, loading: true, error: null, errorStatus: null }));
 
     api
       .listRoles()
       .then((data) => {
         if (!cancelled) {
-          setState({ data, loading: false, error: null });
+          setState({ data, loading: false, error: null, errorStatus: null });
         }
       })
       .catch((error: Error) => {
@@ -39,7 +41,8 @@ export function useRoles(): UseRolesResult {
           setState({
             data: [],
             loading: false,
-            error: handleError(error),
+            error: error instanceof APIError && error.status === 403 ? 'Access denied' : handleError(error),
+            errorStatus: error instanceof APIError ? error.status : null,
           });
         }
       });

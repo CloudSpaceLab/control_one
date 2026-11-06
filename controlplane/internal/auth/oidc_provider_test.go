@@ -34,11 +34,12 @@ func TestOIDCPublishedKeyValidation(t *testing.T) {
 	}))
 	defer server.Close()
 	issuer = server.URL
-	provider, err := NewOIDCProvider(context.Background(), config.OIDCConfig{Enabled: true, IssuerURL: issuer, ClientID: "console", Audience: []string{"console"}}, config.RBACConfig{DefaultRole: "viewer", RoleMappings: map[string][]string{"operator": {"operations"}}})
+	provider, err := NewOIDCProvider(context.Background(), config.OIDCConfig{Enabled: true, IssuerURL: issuer, ClientID: "console", Audience: []string{"controlone-api"}}, config.RBACConfig{DefaultRole: "viewer", RoleMappings: map[string][]string{"operator": {"operations"}}})
 	require.NoError(t, err)
-	for _, scenario := range []string{"valid", "wrong_signature", "wrong_issuer", "wrong_audience", "expired", "missing_subject"} {
+	for _, scenario := range []string{"valid", "wrong_signature", "wrong_issuer", "wrong_audience", "expired", "missing_subject", "id_token", "id_token_api_audience", "missing_type", "missing_scope", "wrong_client", "missing_jti", "missing_iat", "missing_exp", "future_iat", "future_nbf"} {
 		t.Run(scenario, func(t *testing.T) {
-			claims := map[string]any{"iss": issuer, "aud": "console", "sub": "reviewer", "exp": time.Now().Add(time.Minute).Unix(), "iat": time.Now().Unix(), "groups": []string{"operations"}}
+			claims := map[string]any{"iss": issuer, "aud": "controlone-api", "jti": "fixture-id", "client_id": "console", "scope": "controlone.access", "sub": "reviewer", "exp": time.Now().Add(time.Minute).Unix(), "iat": time.Now().Unix(), "groups": []string{"operations"}}
+			tokenType := "at+jwt"
 			signingKey := key
 			switch scenario {
 			case "wrong_signature":
@@ -49,10 +50,31 @@ func TestOIDCPublishedKeyValidation(t *testing.T) {
 				claims["aud"] = "other-client"
 			case "expired":
 				claims["exp"] = time.Now().Add(-time.Minute).Unix()
+			case "id_token":
+				tokenType = "JWT"
+				claims["aud"] = "console"
+			case "id_token_api_audience":
+				tokenType = "JWT"
+			case "missing_type":
+				tokenType = ""
+			case "missing_scope":
+				delete(claims, "scope")
+			case "wrong_client":
+				claims["client_id"] = "other"
+			case "missing_jti":
+				delete(claims, "jti")
+			case "missing_iat":
+				delete(claims, "iat")
+			case "missing_exp":
+				delete(claims, "exp")
+			case "future_iat":
+				claims["iat"] = time.Now().Add(time.Hour).Unix()
+			case "future_nbf":
+				claims["nbf"] = time.Now().Add(time.Hour).Unix()
 			case "missing_subject":
 				delete(claims, "sub")
 			}
-			header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "fixture"})
+			header, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "fixture", "typ": tokenType})
 			payload, _ := json.Marshal(claims)
 			unsigned := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload)
 			digest := sha256.Sum256([]byte(unsigned))

@@ -7,6 +7,10 @@ import type { GlobalRoleSourceEvidence } from '../../lib/api';
 export function GlobalRoleSources({userID, onReviewed}: {userID: string; onReviewed: () => void}) {
   const api = useApiClient();
   const [evidence, setEvidence] = useState<GlobalRoleSourceEvidence | null>(null);
+  const [migrationSubject,setMigrationSubject]=useState('');
+  const [migrationAuthority,setMigrationAuthority]=useState('static');
+  const [preserveMigration,setPreserveMigration]=useState(false);
+  const [migrationDraft,setMigrationDraft]=useState<{expected_revision:string;authority:string;subject:string;reason:string;preserve_as_administrator:boolean}|null>(null);
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -15,7 +19,7 @@ export function GlobalRoleSources({userID, onReviewed}: {userID: string; onRevie
   const [manualDeadline, setManualDeadline] = useState(false);
   const [change, setChange] = useState<{assignment: string; role: string; revision: string; action: 'set_expiry' | 'revoke'; reason: string; expires_at?: string} | null>(null);
   const load = useCallback(async () => {
-    setBusy(true); setError(''); setChange(null); setSuccess('');
+    setBusy(true); setError(''); setChange(null); setMigrationDraft(null); setSuccess('');
     try { setEvidence(await api.getGlobalRoleSources(userID)); }
     catch { setEvidence(null); setError('Role source evidence is unavailable. Refresh before reviewing.'); }
     finally { setBusy(false); }
@@ -53,6 +57,12 @@ export function GlobalRoleSources({userID, onReviewed}: {userID: string; onRevie
     } catch(err) { setChange(null); setEvidence(null); setError(err instanceof Error ? err.message : 'Change failed. Refresh and review again.'); }
     finally { setBusy(false); }
   };
+  const applyMigration=async()=>{
+    if(!migrationDraft||busy)return;setBusy(true);setError('');
+    try{setEvidence(await api.migrateAuthenticationIdentity(userID,migrationDraft));setMigrationDraft(null);setSuccess('Identity migrated. Existing grants remain administrator-owned; provider roles are reconciled only at verified sign-in.');onReviewed();}
+    catch(err){setMigrationDraft(null);setEvidence(null);setError(err instanceof Error?err.message:'Migration failed. Refresh and review again.');}
+    finally{setBusy(false);}
+  };
   return <section aria-label="Global role sources" aria-busy={busy} className="border-b border-border-subtle bg-surface/40 p-5 space-y-5">
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
@@ -70,6 +80,11 @@ export function GlobalRoleSources({userID, onReviewed}: {userID: string; onRevie
         <span className="text-text-secondary">Effective global roles:</span>
         {evidence.effective_roles.length ? evidence.effective_roles.map(role => <span key={role} className="rounded-full border border-brand-500/25 bg-brand-500/10 px-2.5 py-1 font-medium text-foreground">{role}</span>) : <span className="text-text-secondary">None</span>}
       </div>
+      {evidence.execution_authority?.authentication_backed && <div role="status" className="rounded-xl border border-border-subtle bg-elevated p-4 text-sm">
+        <h4 className="font-semibold text-foreground">Unattended patch authority</h4>
+        <p className="mt-1 text-text-secondary">{evidence.execution_authority.detail}</p>
+        <p className="mt-2 text-xs text-text-secondary">Provider binding: {evidence.execution_authority.binding_present ? 'retained' : 'not retained'} · Authority connection: {evidence.execution_authority.configured ? 'configured' : 'not configured'}. This status does not authorize a patch.</p>
+      </div>}
       <div className="rounded-xl border border-border-subtle bg-elevated p-4 space-y-4">
         <label className="block text-xs font-medium text-foreground">Review reason
           <textarea aria-label="Role source review reason" rows={2} maxLength={2000} value={reason} onChange={e => setReason(e.target.value)} placeholder="Explain the authorization or change being reviewed…" className="mt-1.5 block w-full resize-y rounded-lg border border-border-subtle bg-surface p-2.5 text-sm text-foreground placeholder:text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500" />
@@ -84,6 +99,19 @@ export function GlobalRoleSources({userID, onReviewed}: {userID: string; onRevie
           <p className="mt-1 text-xs text-text-secondary">{manualDeadline ? 'Use YYYY-MM-DDTHH:mm. ' : ''}The exact UTC deadline appears in the review.</p>
         </div>}
       </div>
+      {evidence.authentication_migration_available && <div className="rounded-xl border border-border-subtle p-4 space-y-3">
+        <h4 className="font-semibold">Review legacy authentication identity</h4>
+        <p className="text-sm">Use the subject confirmed by your configured identity provider. This never merges accounts by email. Local password and LDAP accounts are excluded. Existing grants retain their deadlines and become administrator-owned, independently of later provider claims.</p>
+        <label className="block text-sm">Authentication authority<select aria-label="Migration authentication authority" value={migrationAuthority} onChange={e=>setMigrationAuthority(e.target.value)} className="block w-full border rounded p-2 bg-surface">{(evidence.authentication_authorities??[]).map(a=><option key={a} value={a}>{a}</option>)}</select></label>
+        <label className="block text-sm">Verified provider subject<input aria-label="Migration verified subject" value={migrationSubject} maxLength={512} onChange={e=>setMigrationSubject(e.target.value)} className="block w-full border rounded p-2 bg-surface" /></label>
+        <label className="flex gap-2 text-sm"><input type="checkbox" checked={preserveMigration} onChange={e=>setPreserveMigration(e.target.checked)} />I authorize retaining existing grants as administrator-owned with their current deadlines.</label>
+        <Button type="button" disabled={busy||!preserveMigration||!migrationSubject.trim()||reason.trim().length<10} onClick={()=>setMigrationDraft({expected_revision:evidence.revision,authority:migrationAuthority,subject:migrationSubject.trim(),reason:reason.trim(),preserve_as_administrator:true})}>Review authentication migration</Button>
+        {migrationDraft && <div role="group" aria-label="Reviewed authentication migration" className="space-y-2 border-t pt-3">
+          <p>Bind this account to {migrationDraft.authority}, subject {migrationDraft.subject}. Retain existing grants as administrator-owned without extending deadlines.</p><p>Reason: {migrationDraft.reason}</p>
+          <Button type="button" disabled={busy} onClick={()=>void applyMigration()}>Apply reviewed authentication migration</Button>
+          <Button type="button" variant="outline" disabled={busy} onClick={()=>setMigrationDraft(null)}>Cancel authentication migration</Button>
+        </div>}
+      </div>}
       <ul className="space-y-3">{evidence.grants.map(g => <li key={`${g.assignment_id}-${g.source}`} className="rounded-xl border border-border-subtle bg-elevated p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <strong className="text-sm text-foreground">{g.role}</strong>

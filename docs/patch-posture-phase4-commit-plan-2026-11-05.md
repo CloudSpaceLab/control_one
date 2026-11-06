@@ -1,3 +1,15 @@
+> **API access-token profile,6 November2026:** browser ID-token fallback removed; explicit API audience/type/client/scope/lifetime checks passed automated tests and main-app SSO verification. Live API access token200, ID token401 and Viewer administration403. Provider-specific/Entra qualification remains open. [Evidence and limits](control-one-organizational-sso-guide-2026-11-05.md#verified-api-access-token-profile---6-november-2026).
+
+<!-- identity-audit-status-20261106 -->
+6 November execution-authority follow-up: the optional single-provider current-authority contract, transactional issuer/subject binding and schedule/dispatch/start guards are implemented with bounded isolated tests. The main-app demonstration proved fresh SSO retains a binding while preserving Viewer restrictions and the unconfigured unattended-execution block. **The identity parent and Phase 4 remain open:** the configured/permitted live provider workflow and actual provider qualification are still outstanding. No multi-organization or VM work was reintroduced. [Current evidence and limits](patch-posture-organization-policy-2026-11-03.md#current-provider-execution-authority---6-november-2026).
+
+6 November browser-exchange follow-up: bounded token-request/body handling and safe failure messages are implemented; 42 affected tests, TypeScript, lint and the production UI build passed. Ambiguous callback refusal and fresh normal SSO recovery were demonstrated live. Network-fault injection permission was declined, so that live test remains unchecked alongside actual-provider qualification. Identity/Phase 4 parents remain open. [Evidence and operator guidance](control-one-organizational-sso-guide-2026-11-05.md#bounded-browser-token-exchange---6-november-2026).
+
+
+<!-- role-writer-status-20261106 -->
+6 November role-writer follow-up: P4-08b.3d.6a.3e is verified in the main app (retained deadlines, new-grant actor and atomic before/after audit; temporary Viewer grant cleaned up). [Evidence and walkthrough](patch-posture-organization-policy-2026-11-03.md#administrator-role-writer-qualification---6-november-2026). Parent identity/provisioning requirements and Phase 4 remain open; [canonical checklist](patch-posture-phase-acceptance.md). VM work stays deferred and multi-organization SSO stays withdrawn.
+
+
 > **Final selection update, 5 November 2026:** the repository owner explicitly confirmed including the real `tmp/local/credentials.json` despite Git-history exposure. That exact file is an exception to the earlier exclusion below. Added public `ui/.env.example`, `ui/.env.sso-lab.example` and the `.gitignore` exceptions. The main selection is now 127 files (123 original + 3 template/ignore changes + the real credential inventory). The optional lab renderer remains excluded. Local commit only; no push authorized. Historical proposals below are superseded where they conflict with this selection.
 
 # Phase 4 commit selection - 5 November 2026
@@ -262,3 +274,27 @@ artifacts are excluded. Staged whitespace checks passed. The 10 selected UI
 test files passed all 73 tests, and TypeScript passed. Focused backend
 authentication, PostgreSQL storage and server verification also passed. No remote push is part
 of this authorization, and Phase 4 acceptance remains open.
+
+
+6 November 2026 OIDC recovery update: bounded discovery retry and signing-key outage/rotation checks passed, including race tests and visible main4173 SSO recovery without API restart. Evidence and limits: [organization identity record](patch-posture-organization-policy-2026-11-03.md#oidc-discovery-and-signing-key-recovery---6-november-2026-bounded-verification-passed). Intended-provider qualification and early revocation stay open; Phase4 remains open.
+
+
+6 November 2026 SSO landing update: local Vite root refresh repaired and demonstrated on main4173;20 focused tests, TypeScript, production asset build and dev/preview HTTP checks passed. See [identity evidence](patch-posture-organization-policy-2026-11-03.md#sso-landing-route-consistency---6-november-2026). Local landing item checked; production ingress query/refresh qualification added unchecked. Real-provider/revocation and Phase4 remain open.
+
+
+6 November 2026 Nginx routing update: repository base redirects now preserve queries; both Nginx variants passed16 isolated routing checks and visible built-app login/invalid-callback demonstration. [Evidence and fixture limits](patch-posture-organization-policy-2026-11-03.md#nginx-ingress-routing---6-november-2026). Implementation child checked; actual intended ingress deployment and Phase4 remain open.
+
+
+6 November 2026 Users access-denied update: P4-08b.3d.6a.3u checked after15 focused tests, TypeScript/lint/build and live existing Operator403/Admin200 verification on main4173. Counters/cached directory/edit controls are hidden for denied access. [Steps and evidence](patch-posture-organization-policy-2026-11-03.md#users-access-denied-view---6-november-2026). Profile Account .3v and parent identity/Phase4 remain open.
+
+
+6 November 2026 scope correction: the owner withdrew the new multi-organization SSO expansion. Its connection/isolation/onboarding checklist additions, configurable Entra token-profile adapter, examples and design were removed. These are not Phase4 completion gates. Original single-provider API-token verification, recovery, routing, Account and callback fixes remain. Original acceptance requirements and deferred host/provider checks retain their existing status.
+
+
+Navigation clarification, 6 November: administrator user management is reached through the top-right **Profile menu → Users & roles**. **Account** opens personal identity information. Separating Account previously removed the only Users shortcut; the replacement administrator entry is restored and live-verified, with 11 existing navigation/account tests passing (P4-08b.3d.6a.3v.n). The primary sidebar stays focused on its existing destinations.
+
+
+Execution-authority follow-up (6 November): include the new executionauthority client/tests, storage boundary guards and binding migration 0193 when reviewing the source change. Keep local candidate executables, backups, runtime logs and real authority service credentials out of a routine source commit. The main app is still unconfigured for current-provider authority; actual organizational qualification and the permitted live installation workflow remain open. See the canonical acceptance tracker and current-provider section of the organizational SSO guide.
+
+
+Browser exchange follow-up (6 November): review ui/src/lib/oidc.ts, oidc.test.ts, oidc-network.test.ts, AuthCallback.tsx and AuthCallback.test.tsx with the updated acceptance/evidence guides. Timeout and size guards are product code; local screenshots/test reports/build output are evidence artifacts. The live network-outage test was declined and remains unperformed; do not describe this change as complete Phase 4 or actual-provider qualification.

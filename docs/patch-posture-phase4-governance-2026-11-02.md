@@ -1,3 +1,15 @@
+> **API access-token profile,6 November2026:** browser ID-token fallback removed; explicit API audience/type/client/scope/lifetime checks passed automated tests and main-app SSO verification. Live API access token200, ID token401 and Viewer administration403. Provider-specific/Entra qualification remains open. [Evidence and limits](control-one-organizational-sso-guide-2026-11-05.md#verified-api-access-token-profile---6-november-2026).
+
+<!-- identity-audit-status-20261106 -->
+6 November execution-authority follow-up: the optional single-provider current-authority contract, transactional issuer/subject binding and schedule/dispatch/start guards are implemented with bounded isolated tests. The main-app demonstration proved fresh SSO retains a binding while preserving Viewer restrictions and the unconfigured unattended-execution block. **The identity parent and Phase 4 remain open:** the configured/permitted live provider workflow and actual provider qualification are still outstanding. No multi-organization or VM work was reintroduced. [Current evidence and limits](patch-posture-organization-policy-2026-11-03.md#current-provider-execution-authority---6-november-2026).
+
+6 November browser-exchange follow-up: bounded token-request/body handling and safe failure messages are implemented; 42 affected tests, TypeScript, lint and the production UI build passed. Ambiguous callback refusal and fresh normal SSO recovery were demonstrated live. Network-fault injection permission was declined, so that live test remains unchecked alongside actual-provider qualification. Identity/Phase 4 parents remain open. [Evidence and operator guidance](control-one-organizational-sso-guide-2026-11-05.md#bounded-browser-token-exchange---6-november-2026).
+
+
+<!-- role-writer-status-20261106 -->
+6 November role-writer follow-up: P4-08b.3d.6a.3e is verified in the main app (retained deadlines, new-grant actor and atomic before/after audit; temporary Viewer grant cleaned up). [Evidence and walkthrough](patch-posture-organization-policy-2026-11-03.md#administrator-role-writer-qualification---6-november-2026). Parent identity/provisioning requirements and Phase 4 remain open; [canonical checklist](patch-posture-phase-acceptance.md). VM work stays deferred and multi-organization SSO stays withdrawn.
+
+
 > **Browser SSO provision confirmed, 5 November 2026:** the UI already implements a conditional SSO button, PKCE redirect and callback/token exchange; the backend implements OIDC verification and source reconciliation. Real-provider qualification and discovered callback/session-lifetime gaps remain unchecked. [Inspection](patch-posture-organization-policy-2026-11-03.md#existing-browser-sso-provision-confirmed---5-november-2026).
 
 > **Fresh browser identity-origin demo, 5 November 2026:** a separate pre-creation replay demonstrated both first sign-ins, automatic user creation, Operator → Viewer, fallback identity/no-tenant access, token removal and administrator source review. Tokens ended disabled; permission-page/navigation gaps are tracked open. [Full walkthrough](patch-posture-organization-policy-2026-11-03.md#fresh-browser-account-origin-walkthrough---5-november-2026).
@@ -125,3 +137,18 @@ The initial bounded checkpoint above is historical. The subsequent [operational-
 Recommendation-only remains the effective installation mode. Scheduled and narrowly automatic modes can be reviewed and saved as disabled drafts; activation is rejected until Phase 5 execution/promotion qualification. Email/SMS/webhook delivery is outside the implemented in-app channel. The lab owner/example policy is not organisational production approval.
 
 Full Phase 4 remains open for measured service/reboot/compatibility outcomes and complete intended platform/transport qualification under P4-04e, and for active scheduled/automatic execution under P4-07. VM/full-host acceptance remains deferred. The canonical checklist records each demonstrated operator-control check separately and does not convert a draft or isolated fixture into production rollout evidence.
+
+
+6 November 2026 OIDC recovery update: bounded discovery retry and signing-key outage/rotation checks passed, including race tests and visible main4173 SSO recovery without API restart. Evidence and limits: [organization identity record](patch-posture-organization-policy-2026-11-03.md#oidc-discovery-and-signing-key-recovery---6-november-2026-bounded-verification-passed). Intended-provider qualification and early revocation stay open; Phase4 remains open.
+
+
+6 November 2026 SSO landing update: local Vite root refresh repaired and demonstrated on main4173;20 focused tests, TypeScript, production asset build and dev/preview HTTP checks passed. See [identity evidence](patch-posture-organization-policy-2026-11-03.md#sso-landing-route-consistency---6-november-2026). Local landing item checked; production ingress query/refresh qualification added unchecked. Real-provider/revocation and Phase4 remain open.
+
+
+6 November 2026 Nginx routing update: repository base redirects now preserve queries; both Nginx variants passed16 isolated routing checks and visible built-app login/invalid-callback demonstration. [Evidence and fixture limits](patch-posture-organization-policy-2026-11-03.md#nginx-ingress-routing---6-november-2026). Implementation child checked; actual intended ingress deployment and Phase4 remain open.
+
+
+6 November 2026 Users access-denied update: P4-08b.3d.6a.3u checked after15 focused tests, TypeScript/lint/build and live existing Operator403/Admin200 verification on main4173. Counters/cached directory/edit controls are hidden for denied access. [Steps and evidence](patch-posture-organization-policy-2026-11-03.md#users-access-denied-view---6-november-2026). Profile Account .3v and parent identity/Phase4 remain open.
+
+
+6 November 2026 scope correction: the owner withdrew the new multi-organization SSO expansion. Its connection/isolation/onboarding checklist additions, configurable Entra token-profile adapter, examples and design were removed. These are not Phase4 completion gates. Original single-provider API-token verification, recovery, routing, Account and callback fixes remain. Original acceptance requirements and deferred host/provider checks retain their existing status.

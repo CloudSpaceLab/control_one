@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { APIClient, APIError, type Profile } from '../lib/api';
@@ -40,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const signInAttempt = useRef(0);
   const apiClient = useMemo(() => new APIClient({ token: readStoredToken() }), []);
 
   useEffect(() => {
@@ -58,6 +60,8 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   }, [token]);
 
   const handleSessionEnded = useCallback((message?: string | null) => {
+    signInAttempt.current += 1;
+    setLoading(false);
     // Clear the apiClient token SYNCHRONOUSLY so any in-flight request
     // dispatched by other consumers in the same tick uses null, not the
     // stale token. The useEffect that mirrors token state would otherwise
@@ -119,6 +123,30 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     return () => window.clearInterval(id);
   }, [token, refreshProfile]);
 
+  const signIn = useCallback(async (nextToken: string): Promise<void> => {
+    const trimmed = nextToken.trim();
+    if (!trimmed) throw new Error('Token is required');
+    const attempt = ++signInAttempt.current;
+    setLoading(true); setError(null);
+    try {
+      // Verify with a separate client: a refused initial identity is not an
+      // expired established session, and must not publish authenticated state.
+      const candidate = new APIClient({token: trimmed});
+      const verified = await candidate.getProfile();
+      if (attempt !== signInAttempt.current) throw new Error('Sign-in was superseded. Start a fresh sign-in.');
+      apiClient.setToken(trimmed);
+      setProfile(verified); setToken(trimmed); setError(null);
+    } catch {
+      const message = 'Sign-in could not be verified. Contact your administrator to check account access, or start a new sign-in.';
+      if (attempt === signInAttempt.current) {
+        apiClient.setToken(null); setToken(null); setProfile(null); setError(message);
+      }
+      throw new Error(message);
+    } finally {
+      if (attempt === signInAttempt.current) setLoading(false);
+    }
+  }, [apiClient]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       token,
@@ -127,22 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       loading,
       error,
       apiClient,
-      signIn: async (nextToken: string) => {
-        const trimmed = nextToken.trim();
-        if (!trimmed) {
-          throw new Error('Token is required');
-        }
-        // Sync the apiClient token BEFORE flipping the React state.
-        // Other consumers (TenantProvider, dashboards) react to
-        // isAuthenticated flipping true and immediately call into
-        // apiClient — without this sync those calls would fly without
-        // an Authorization header and bounce 401, triggering the
-        // unauthorized handler and logging the user back out instantly.
-        apiClient.setToken(trimmed);
-        setToken(trimmed);
-        setProfile(null);
-        setError(null);
-      },
+      signIn,
       signOut: async () => {
         try {
           if (token && token.trim() !== '') {
@@ -156,7 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       },
       refreshProfile,
     }),
-    [token, profile, loading, error, refreshProfile, handleSessionEnded, apiClient],
+    [token, profile, loading, error, refreshProfile, handleSessionEnded, apiClient, signIn],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

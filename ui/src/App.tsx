@@ -46,6 +46,7 @@ const PatchManagement = lazy(() => import('./pages/PatchManagement').then((m) =>
 const Roles = lazy(() => import('./pages/Roles').then((m) => ({ default: m.Roles })));
 const Audit = lazy(() => import('./pages/Audit').then((m) => ({ default: m.Audit })));
 const Users = lazy(() => import('./pages/Users').then((m) => ({ default: m.Users })));
+const Account = lazy(() => import('./pages/Account').then((m) => ({ default: m.Account })));
 const Telemetry = lazy(() => import('./pages/Telemetry').then((m) => ({ default: m.Telemetry })));
 const Secrets = lazy(() => import('./pages/Secrets').then((m) => ({ default: m.Secrets })));
 const OfflineBundle = lazy(() => import('./pages/OfflineBundle').then((m) => ({ default: m.OfflineBundle })));
@@ -290,6 +291,7 @@ export function App(): JSX.Element {
                 <Route path="roles" element={<AdminOnly><Roles /></AdminOnly>} />
                 <Route path="audit" element={<Audit />} />
                 <Route path="users" element={<Users />} />
+                <Route path="account" element={<Account />} />
                 <Route path="telemetry" element={<Telemetry />} />
                 <Route path="secrets" element={<Secrets />} />
                 <Route path="offline-bundle" element={<OfflineBundle />} />

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AuditLog, ListAuditLogsParams, PaginatedResponse } from '../lib/api';
+import { APIError, AuditLog, ListAuditLogsParams, PaginatedResponse } from '../lib/api';
 import { useApiClient } from './useApiClient';
 import { useApiErrorHandler } from './useApiErrorHandler';
 
 interface AuditLogsState extends PaginatedResponse<AuditLog> {
   loading: boolean;
   error: string | null;
+  errorStatus: number | null;
 }
 
 interface UseAuditLogsResult extends AuditLogsState {
@@ -20,11 +21,13 @@ export function useAuditLogs(params: ListAuditLogsParams = {}): UseAuditLogsResu
     pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
     loading: true,
     error: null,
+    errorStatus: null,
   });
   const [reloadToken, setReloadToken] = useState(0);
 
   const normalizedParams = useMemo(
     () => ({
+      scope: params.scope,
       tenant_id: params.tenant_id,
       actor_type: params.actor_type,
       action: params.action,
@@ -36,6 +39,7 @@ export function useAuditLogs(params: ListAuditLogsParams = {}): UseAuditLogsResu
       offset: params.offset,
     }),
     [
+      params.scope,
       params.tenant_id,
       params.actor_type,
       params.action,
@@ -51,7 +55,7 @@ export function useAuditLogs(params: ListAuditLogsParams = {}): UseAuditLogsResu
   useEffect(() => {
     let cancelled = false;
 
-    if (!normalizedParams.tenant_id) {
+    if (!normalizedParams.tenant_id && normalizedParams.scope !== 'global_identity') {
       setState({
         data: [],
         pagination: {
@@ -64,19 +68,20 @@ export function useAuditLogs(params: ListAuditLogsParams = {}): UseAuditLogsResu
         },
         loading: false,
         error: null,
+        errorStatus: null,
       });
       return () => {
         cancelled = true;
       };
     }
 
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, data: [], loading: true, error: null, errorStatus: null }));
 
     api
       .listAuditLogs(normalizedParams)
       .then((response) => {
         if (!cancelled) {
-          setState({ ...response, loading: false, error: null });
+          setState({ ...response, loading: false, error: null, errorStatus: null });
         }
       })
       .catch((error: Error) => {
@@ -85,7 +90,8 @@ export function useAuditLogs(params: ListAuditLogsParams = {}): UseAuditLogsResu
             data: [],
             pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
             loading: false,
-            error: handleError(error),
+            error: error instanceof APIError && error.status === 403 ? (normalizedParams.scope === 'global_identity' ? 'Current global administrator access is required for global identity evidence.' : 'Tenant audit access is not authorized.') : handleError(error),
+            errorStatus: error instanceof APIError ? error.status : null,
           });
         }
       });

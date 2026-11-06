@@ -67,6 +67,9 @@ func (s *Store) PersistAuthenticationRoles(ctx context.Context, authority, subje
 	if actualProvider != provider {
 		return nil, nil, errors.New("authentication provider identity mismatch")
 	}
+	if err = bindAuthenticationAuthority(ctx, tx, user.ID, external, authority, subject); err != nil {
+		return nil, nil, err
+	}
 	// Provisioning/legacy rows do not prove ownership by this authority.
 	var ambiguous bool
 	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles ur WHERE ur.user_id=$1 AND ur.tenant_id IS NULL AND (NOT EXISTS(SELECT 1 FROM global_role_sources g WHERE g.assignment_id=ur.id) OR EXISTS(SELECT 1 FROM global_role_sources g WHERE g.assignment_id=ur.id AND g.source IN ('legacy_unknown','provisioning'))))`, user.ID).Scan(&ambiguous); err != nil {

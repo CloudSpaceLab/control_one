@@ -42,6 +42,25 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 	if p.Mode == "airgapped" && p.ApprovalID == uuid.Nil {
 		return nil, errors.New("offline execution requires explicit approval")
 	}
+	var preflight struct {
+		AutomationRunID string `json:"automation_run_id"`
+	}
+	if json.Unmarshal(p.Payload, &preflight) != nil {
+		return nil, errors.New("invalid patch payload")
+	}
+	var prepErr error
+	if preflight.AutomationRunID != "" {
+		runID, e := uuid.Parse(preflight.AutomationRunID)
+		if e != nil {
+			return nil, e
+		}
+		ctx, prepErr = s.prepareAutomationAuthority(ctx, p.TenantID, runID, "dispatch", p.ApprovalID.String())
+	} else {
+		ctx, prepErr = s.prepareExecutionAuthority(ctx, p.TenantID, "dispatch", p.ApprovalID.String())
+	}
+	if prepErr != nil {
+		return nil, prepErr
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -352,6 +371,9 @@ func (s *Store) DispatchPatchJob(ctx context.Context, p DispatchPatchJobParams) 
 		if _, err = tx.ExecContext(ctx, `INSERT INTO patch_governance_events(tenant_id,kind,revision,actor,document) SELECT tenant_id,'automation_dispatched',policy_revision,actor_id::text,$2 FROM patch_automation_runs WHERE id=$1`, automationRun, body); err != nil {
 			return nil, err
 		}
+	}
+	if err = checkExecutionProofDeadlines(ctx); err != nil {
+		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err

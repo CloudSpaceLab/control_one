@@ -66,10 +66,12 @@ function actionTone(action: string): StateTone {
 }
 
 function exportToCSV(logs: AuditLog[], filename: string): void {
-  const headers = ['Timestamp', 'Actor Type', 'Action', 'Resource Type', 'Resource ID', 'Tenant ID', 'Metadata'];
+  const headers = ['Event ID', 'Timestamp', 'Actor Type', 'Actor ID', 'Action', 'Resource Type', 'Resource ID', 'Tenant ID', 'Metadata'];
   const rows = logs.map((log) => [
+    log.id,
     log.created_at,
     log.actor_type,
+    log.actor_id || '',
     log.action,
     log.resource_type,
     log.resource_id || '',
@@ -93,6 +95,7 @@ export function Audit(): JSX.Element {
   const [actorTypeFilter, setActorTypeFilter] = useState('');
   const [actionFilter, setActionFilter] = useState('');
   const [resourceTypeFilter, setResourceTypeFilter] = useState('');
+  const [auditScope, setAuditScope] = useState<'tenant' | 'global_identity'>('tenant');
   const [search, setSearch] = useState(() => params.get('q') ?? '');
   const [limit] = useState(100);
   const [offset, setOffset] = useState(0);
@@ -100,8 +103,9 @@ export function Audit(): JSX.Element {
   const { currentTenantId } = useTenant();
   const { data: tenants } = useTenants();
   const auditTenantId = selectedTenant ?? currentTenantId ?? undefined;
-  const { data: logs, loading, error, pagination, reload } = useAuditLogs({
-    tenant_id: auditTenantId,
+  const { data: logs, loading, error, errorStatus, pagination, reload } = useAuditLogs({
+    scope: auditScope,
+    tenant_id: auditScope === 'global_identity' ? undefined : auditTenantId,
     actor_type: actorTypeFilter || undefined,
     action: actionFilter || undefined,
     resource_type: resourceTypeFilter || undefined,
@@ -177,7 +181,7 @@ export function Audit(): JSX.Element {
       header: 'Resource',
       cell: ({ row }) => {
         const id = row.original.resource_id;
-        const det = id ? classifyValue(id) : { type: 'unknown' as const };
+        const det = id && row.original.resource_type !== 'user' ? classifyValue(id) : { type: 'unknown' as const };
         return (
           <div className="flex items-center gap-2">
             <span className="font-mono text-xs text-text-secondary">{row.original.resource_type}</span>
@@ -208,6 +212,7 @@ export function Audit(): JSX.Element {
 
   const userCount = logs.filter((l) => l.actor_type === 'user').length;
   const systemCount = logs.filter((l) => l.actor_type === 'system').length;
+  const globalDenied = auditScope === 'global_identity' && errorStatus === 403;
   const auditUnavailable = Boolean(error) && !loading;
   const currentPage = Math.floor(offset / limit) + 1;
   const auditTableEyebrow = auditUnavailable
@@ -286,8 +291,16 @@ export function Audit(): JSX.Element {
           )}
 
           <Panel padding="md" eyebrow="FILTERS" title="Refine">
+            <div className="mb-4 space-y-2">
+              <label className="text-sm" htmlFor="audit-scope">Audit scope</label>
+              <select id="audit-scope" className="block rounded-lg border border-border-subtle bg-surface p-2 text-sm" value={auditScope} onChange={e => {setAuditScope(e.target.value as 'tenant' | 'global_identity'); setOffset(0);setActionFilter('');setResourceTypeFilter('');setSearch('');}}>
+                <option value="tenant">Tenant activity</option>
+                <option value="global_identity">Global identity &amp; roles</option>
+              </select>
+              {auditScope === 'global_identity' && <p className="text-sm text-text-secondary">Current global administrator access required. Includes retained role-source reviews and atomic before/after evidence. Export covers the current filtered page.</p>}
+            </div>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              <FilterSelect
+              {auditScope === 'tenant' && <FilterSelect
                 label="Tenant"
                 value={auditTenantId ?? ''}
                 onChange={(v) => { setSelectedTenant(v || undefined); setOffset(0); }}
@@ -295,7 +308,7 @@ export function Audit(): JSX.Element {
                   ...(auditTenantId ? [] : [{ label: 'Select tenant', value: '' }]),
                   ...tenants.map((t) => ({ label: t.name, value: t.id })),
                 ]}
-              />
+              />}
               <FilterSelect
                 label="Actor type"
                 value={actorTypeFilter}
@@ -339,8 +352,8 @@ export function Audit(): JSX.Element {
           {error && (
             <Alert
               variant="critical"
-              title="Audit trail unavailable"
-              actions={
+              title={globalDenied ? "Global audit access restricted" : "Audit trail unavailable"}
+              actions={globalDenied ? undefined :
                 <Button variant="outline" size="sm" onClick={reload} disabled={loading}>
                   Retry
                 </Button>
@@ -366,8 +379,8 @@ export function Audit(): JSX.Element {
                 auditUnavailable ? (
                   <EmptyState
                     icon={<FileText />}
-                    title="Audit trail unavailable"
-                    description="Audit entries could not be loaded for the selected tenant."
+                    title={globalDenied ? "Global audit access restricted" : "Audit trail unavailable"}
+                    description={globalDenied ? "Use an authorized global administrator account. Tenant permissions do not grant global identity access." : "Audit entries could not be loaded for the selected scope."}
                   />
                 ) : (
                   <EmptyState

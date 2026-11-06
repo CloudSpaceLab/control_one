@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { User, ListUsersParams, PaginatedResponse } from '../lib/api';
+import { APIError, User, ListUsersParams, PaginatedResponse } from '../lib/api';
 import { useApiClient } from './useApiClient';
 import { useApiErrorHandler } from './useApiErrorHandler';
 
 interface UsersState extends PaginatedResponse<User> {
   loading: boolean;
   error: string | null;
+  errorStatus: number | null;
 }
 
 interface UseUsersResult extends UsersState {
@@ -20,6 +21,7 @@ export function useUsers(params: ListUsersParams = {}): UseUsersResult {
     pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
     loading: true,
     error: null,
+    errorStatus: null,
   });
   const [reloadToken, setReloadToken] = useState(0);
 
@@ -33,13 +35,13 @@ export function useUsers(params: ListUsersParams = {}): UseUsersResult {
 
   useEffect(() => {
     let cancelled = false;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    setState((prev) => ({ ...prev, loading: true, error: null, errorStatus: null }));
 
     api
       .listUsers(normalizedParams)
       .then((response) => {
         if (!cancelled) {
-          setState({ ...response, loading: false, error: null });
+          setState({ ...response, loading: false, error: null, errorStatus: null });
         }
       })
       .catch((error: Error) => {
@@ -48,7 +50,8 @@ export function useUsers(params: ListUsersParams = {}): UseUsersResult {
             data: [],
             pagination: { total: 0, count: 0, limit: 0, offset: 0, nextOffset: null, prevOffset: null },
             loading: false,
-            error: handleError(error),
+            error: error instanceof APIError && error.status === 403 ? 'Access denied' : handleError(error),
+            errorStatus: error instanceof APIError ? error.status : null,
           });
         }
       });

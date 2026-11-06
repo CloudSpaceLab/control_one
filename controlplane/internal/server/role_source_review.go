@@ -101,5 +101,27 @@ func (s *Server) handleGlobalRoleSources(w http.ResponseWriter, r *http.Request,
 	_, changesAvailable := s.store.(interface {
 		ChangeAdministratorRoleSource(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, string, string, string, *time.Time) error
 	})
-	writeJSON(w, 200, map[string]any{"revision": state.Revision, "effective_roles": state.Roles, "grants": grants, "administrator_changes_available": changesAvailable})
+	migrationAvailable := false
+	if candidates, ok := s.store.(interface {
+		AuthenticationMigrationEligible(context.Context, uuid.UUID) (bool, error)
+	}); ok {
+		var e error
+		migrationAvailable, e = candidates.AuthenticationMigrationEligible(r.Context(), user)
+		if e != nil {
+			http.Error(w, "Identity migration evidence unavailable.", 503)
+			return
+		}
+	}
+	var executionEvidence any
+	if executionStore, ok := s.store.(interface {
+		ExecutionAuthorityReadiness(context.Context, uuid.UUID) (storage.ExecutionAuthorityReadiness, error)
+	}); ok {
+		readiness, e := executionStore.ExecutionAuthorityReadiness(r.Context(), user)
+		if e != nil {
+			http.Error(w, "Execution authority readiness unavailable.", 503)
+			return
+		}
+		executionEvidence = readiness
+	}
+	writeJSON(w, 200, map[string]any{"execution_authority": executionEvidence, "authentication_migration_available": migrationAvailable, "authentication_authorities": s.authenticationMigrationAuthorities(), "revision": state.Revision, "effective_roles": state.Roles, "grants": grants, "administrator_changes_available": changesAvailable})
 }

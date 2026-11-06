@@ -9,6 +9,7 @@ import {
   Settings,
   ShieldCheck,
   User as UserIcon,
+  Users as UsersIcon,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/providers/AuthProvider';
@@ -75,6 +76,12 @@ export function ProfileMenu() {
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
+              <Link to="/users">
+                <UsersIcon className="h-4 w-4" />
+                Users &amp; roles
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
               <Link to="/roles">
                 <ShieldCheck className="h-4 w-4" />
                 Roles &amp; permissions
@@ -109,7 +116,7 @@ export function ProfileMenu() {
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link to="/users">
+          <Link to="/account">
             <UserIcon className="h-4 w-4" />
             Account
           </Link>

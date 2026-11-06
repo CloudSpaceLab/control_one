@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/executionauthority"
 	"net"
 	"os"
 	"strings"
@@ -296,8 +297,9 @@ type AsynqConfig struct {
 
 // AuthConfig captures identity provider and RBAC settings.
 type AuthConfig struct {
-	OIDC OIDCConfig `mapstructure:"oidc"`
-	RBAC RBACConfig `mapstructure:"rbac"`
+	ExecutionAuthority executionauthority.Config `mapstructure:"execution_authority"`
+	OIDC               OIDCConfig                `mapstructure:"oidc"`
+	RBAC               RBACConfig                `mapstructure:"rbac"`
 }
 
 // OIDCConfig defines OpenID Connect verification options.
@@ -708,6 +710,9 @@ func Validate(cfg *Config) error {
 		}
 		if strings.TrimSpace(cfg.Auth.OIDC.ClientID) == "" {
 			return fmt.Errorf("auth.oidc.client_id is required when oidc is enabled")
+		}
+		if len(cfg.Auth.OIDC.Audience) != 1 || strings.TrimSpace(cfg.Auth.OIDC.Audience[0]) == "" || cfg.Auth.OIDC.Audience[0] == cfg.Auth.OIDC.ClientID {
+			return fmt.Errorf("auth.oidc.audience must contain one API resource distinct from client_id")
 		}
 	}
 

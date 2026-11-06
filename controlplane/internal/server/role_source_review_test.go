@@ -64,3 +64,34 @@ func TestGlobalRoleSourceReviewAPI(t *testing.T) {
 	require.Equal(t, 403, call(body).Code)
 	require.Equal(t, 2, store.reviews)
 }
+
+func (s *roleReviewAPIStore) MigrateAuthenticationIdentity(ctx context.Context, actor, user uuid.UUID, expected, authority, subject, reason string) error {
+	return s.ReviewLegacyRoleSource(ctx, actor, user, uuid.Nil, expected, reason)
+}
+func TestAuthenticationMigrationAPIRequiresExplicitReview(t *testing.T) {
+	actor, target := uuid.New(), uuid.New()
+	base := newPatchTestStore(uuid.New(), uuid.New())
+	p := &auth.Principal{Type: "user", Subject: "migration-admin", Roles: []string{"admin"}}
+	base.users = map[string]*storage.User{p.Subject: {ID: actor, ExternalID: p.Subject}}
+	store := &roleReviewAPIStore{globalRoleBoundaryStore: &globalRoleBoundaryStore{tenantRoleTestStore: &tenantRoleTestStore{governanceTestStore: &governanceTestStore{patchSecurityStore: &patchSecurityStore{patchTestStore: base, allowed: true}}, global: true}}}
+	srv := newPatchTestServer(store)
+	call := func(body string) int {
+		w := httptest.NewRecorder()
+		srv.handleUserSubroutes(w, withPrincipal(httptest.NewRequest("POST", "/api/v1/users/"+target.String()+"/authentication-migration", bytes.NewBufferString(body)), p))
+		return w.Code
+	}
+	require.Equal(t, 400, call(`{"authority":"static"}`))
+	require.Zero(t, store.reviews)
+	require.Equal(t, 400, call(`{"preserve_as_administrator":true,"authority":"oidc:https://unconfigured.invalid"}`))
+	require.Zero(t, store.reviews)
+	body := `{"preserve_as_administrator":true,"authority":"static","subject":"legacy-subject","expected_revision":"reviewed","reason":"Reviewed provider identity binding"}`
+	store.reviewErr = storage.ErrGovernanceConflict
+	require.Equal(t, 409, call(body))
+	require.Zero(t, store.reviews)
+	store.reviewErr = nil
+	require.Equal(t, 200, call(body))
+	require.Equal(t, 1, store.reviews)
+	store.global = false
+	require.Equal(t, 403, call(body))
+	require.Equal(t, 1, store.reviews)
+}

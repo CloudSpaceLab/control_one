@@ -17,6 +17,11 @@ function ProfileRefreshHarness(): JSX.Element {
   return <><p>{error}</p><p>{loading ? 'Loading profile' : 'Profile ready'}</p><p>Roles: {profile?.roles.join(',')}</p><button onClick={() => void refreshProfile({background: true})}>Refresh current authority</button></>;
 }
 
+function CandidateSignInHarness(): JSX.Element {
+ const {signIn,signOut,isAuthenticated,error}=useAuth();
+ return <><p>{isAuthenticated?'Authenticated':'Unauthenticated'}</p><p>{error}</p><button onClick={()=>void signIn('candidate-fixture-token').catch(()=>{})}>Verify candidate</button><button onClick={()=>void signOut()}>Cancel candidate</button></>;
+}
+
 describe('AuthProvider', () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -98,6 +103,31 @@ describe('AuthProvider', () => {
     render(<AuthProvider><ProfileRefreshHarness /></AuthProvider>);
     expect(await screen.findByText(/Directory access changed or could not be verified/)).toBeVisible();
     await waitFor(() => expect(window.localStorage.getItem('control-one-token')).toBeNull());
+  });
+
+  it('never publishes or stores a candidate before profile verification, then accepts a verified identity',async()=>{
+    let finish:(value:Response)=>void=()=>{};
+    const profile=()=>new Response(JSON.stringify({subject:'verified',roles:['viewer'],groups:[],type:'user'}),{status:200,headers:{'Content-Type':'application/json'}});
+    vi.stubGlobal('fetch',vi.fn().mockImplementationOnce(()=>new Promise<Response>(resolve=>{finish=resolve;})).mockImplementation(async()=>profile()));
+    render(<AuthProvider><CandidateSignInHarness/></AuthProvider>);await userEvent.click(screen.getByRole('button',{name:'Verify candidate'}));
+    expect(screen.getByText('Unauthenticated')).toBeVisible();expect(window.localStorage.getItem('control-one-token')).toBeNull();
+    await act(async()=>finish(profile()));expect(await screen.findByText('Authenticated')).toBeVisible();await waitFor(()=>expect(window.localStorage.getItem('control-one-token')).toBe('candidate-fixture-token'));
+  });
+  it('reports initial profile refusal as unverified sign-in and discards the candidate',async()=>{
+    vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('Forbidden identity fixture',{status:401})));
+    render(<AuthProvider><CandidateSignInHarness/></AuthProvider>);await userEvent.click(screen.getByRole('button',{name:'Verify candidate'}));
+    expect(await screen.findByText(/Sign-in could not be verified/)).toBeVisible();expect(screen.getByText('Unauthenticated')).toBeVisible();expect(window.localStorage.getItem('control-one-token')).toBeNull();expect(screen.queryByText(/Session has expired/)).not.toBeInTheDocument();
+  });
+  it('keeps expiry messaging for a previously established session',async()=>{
+    window.localStorage.setItem('control-one-token','expired-established-session');vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response('Expired',{status:401})));
+    render(<AuthProvider><ProfileRefreshHarness/></AuthProvider>);expect(await screen.findByText('Session has expired. Please sign in again.')).toBeVisible();await waitFor(()=>expect(window.localStorage.getItem('control-one-token')).toBeNull());
+  });
+
+  it('does not resurrect a candidate after sign-out while verification is pending',async()=>{
+    let finish:(value:Response)=>void=()=>{};vi.stubGlobal('fetch',vi.fn().mockImplementationOnce(()=>new Promise<Response>(resolve=>{finish=resolve;})));
+    render(<AuthProvider><CandidateSignInHarness/></AuthProvider>);await userEvent.click(screen.getByRole('button',{name:'Verify candidate'}));await userEvent.click(screen.getByRole('button',{name:'Cancel candidate'}));
+    await act(async()=>finish(new Response(JSON.stringify({subject:'candidate',roles:['viewer'],groups:[],type:'user'}),{status:200,headers:{'Content-Type':'application/json'}})));
+    expect(screen.getByText('Unauthenticated')).toBeVisible();expect(window.localStorage.getItem('control-one-token')).toBeNull();
   });
 
 });

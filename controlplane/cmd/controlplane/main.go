@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/executionauthority"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/migrate"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/server"
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/storage"
@@ -47,7 +48,14 @@ func main() {
 		}()
 	}
 
-	store, err := storage.New(logger, cfg.Database, storage.Options{})
+	authorityClient, err := executionauthority.New(cfg.Auth.ExecutionAuthority, cfg.Auth.OIDC.IssuerURL)
+	if err != nil {
+		logger.Fatal("init execution authority", zap.Error(err))
+	}
+	if cfg.Auth.ExecutionAuthority.Enabled && !cfg.Auth.OIDC.Enabled {
+		logger.Fatal("execution authority requires enabled OIDC")
+	}
+	store, err := storage.New(logger, cfg.Database, storage.Options{ExecutionAuthority: authorityClient})
 	if err != nil {
 		logger.Fatal("init database", zap.Error(err))
 	}

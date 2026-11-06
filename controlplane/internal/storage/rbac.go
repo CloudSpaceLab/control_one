@@ -522,7 +522,7 @@ func (s *Store) SetUserRoles(ctx context.Context, userID uuid.UUID, roles []stri
 	if unknown {
 		return ErrRoleSourceReviewRequired
 	}
-	if _, err = tx.ExecContext(ctx, `DELETE FROM global_role_sources g USING user_roles ur WHERE g.assignment_id=ur.id AND ur.user_id=$1 AND ur.tenant_id IS NULL AND g.source='administrator'`, userID); err != nil {
+	if _, err = tx.ExecContext(ctx, `DELETE FROM global_role_sources g USING user_roles ur WHERE g.assignment_id=ur.id AND ur.user_id=$1 AND ur.tenant_id IS NULL AND g.source='administrator' AND NOT EXISTS(SELECT 1 FROM roles r WHERE r.id=ur.role_id AND r.name=ANY($2))`, userID, pq.Array(append([]string{}, sanitizeRoles(roles)...))); err != nil {
 		return err
 	}
 	for _, name := range sanitizeRoles(roles) {
@@ -536,7 +536,7 @@ func (s *Store) SetUserRoles(ctx context.Context, userID uuid.UUID, roles []stri
 		if err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO global_role_sources(assignment_id,source) VALUES($1,'administrator')`, assignment); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO global_role_sources(assignment_id,source) VALUES($1,'administrator') ON CONFLICT(assignment_id,source) DO UPDATE SET grant_id=gen_random_uuid()`, assignment); err != nil {
 			return err
 		}
 	}

@@ -66,7 +66,7 @@ func (s *Store) ListPatchOrganizationHistory(ctx context.Context, tenant uuid.UU
 
 func organizationRole(ctx context.Context, tx *sql.Tx, tenant, user uuid.UUID, roles []string) error {
 	var allowed bool
-	e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id JOIN users u ON u.id=ur.user_id WHERE ur.user_id=$1 AND u.disabled_at IS NULL AND (ur.tenant_id=$2 OR ur.tenant_id IS NULL) AND r.name=ANY($3) AND (ur.expires_at IS NULL OR ur.expires_at>NOW()))`, user, tenant, pq.Array(roles)).Scan(&allowed)
+	e := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id JOIN users u ON u.id=ur.user_id WHERE ur.user_id=$1 AND u.disabled_at IS NULL AND (ur.tenant_id=$2 OR ur.tenant_id IS NULL) AND r.name=ANY($3) AND (ur.expires_at IS NULL OR ur.expires_at>clock_timestamp()))`, user, tenant, pq.Array(roles)).Scan(&allowed)
 	if e != nil {
 		return e
 	}
@@ -84,7 +84,7 @@ func organizationApprover(ctx context.Context, tx *sql.Tx, tenant, user uuid.UUI
 }
 
 func (s *Store) ListPatchOrganizationPeople(ctx context.Context, tenant uuid.UUID) ([]PatchReviewRecipient, error) {
-	rows, e := s.db.QueryContext(ctx, `SELECT u.id,COALESCE(NULLIF(u.display_name,''),u.external_id) FROM users u WHERE u.disabled_at IS NULL AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND (ur.tenant_id=$1 OR ur.tenant_id IS NULL) AND (ur.expires_at IS NULL OR ur.expires_at>NOW()) AND r.name IN ('admin','ciso')) ORDER BY u.id`, tenant)
+	rows, e := s.db.QueryContext(ctx, `SELECT u.id,COALESCE(NULLIF(u.display_name,''),u.external_id) FROM users u WHERE u.disabled_at IS NULL AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE ur.user_id=u.id AND (ur.tenant_id=$1 OR ur.tenant_id IS NULL) AND (ur.expires_at IS NULL OR ur.expires_at>clock_timestamp()) AND r.name IN ('admin','ciso')) ORDER BY u.id`, tenant)
 	if e != nil {
 		return nil, e
 	}

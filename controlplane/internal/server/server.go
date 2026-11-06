@@ -1554,6 +1554,15 @@ func (s *Server) handleUserSubroutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	idStr := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/users/")
+	if strings.HasSuffix(idStr, "/authentication-migration") {
+		userID, err := uuid.Parse(strings.TrimSuffix(idStr, "/authentication-migration"))
+		if err != nil {
+			http.Error(w, "invalid user id", 400)
+			return
+		}
+		s.handleAuthenticationMigration(w, r, userID)
+		return
+	}
 	if strings.HasSuffix(idStr, "/role-sources") {
 		userID, err := uuid.Parse(strings.TrimSuffix(idStr, "/role-sources"))
 		if err != nil {

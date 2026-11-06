@@ -1,6 +1,7 @@
 import { GlobalRoleSources } from '../features/patch-management/GlobalRoleSources';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Users as UsersIcon, X } from 'lucide-react';
+import { RefreshCw, ShieldAlert, Users as UsersIcon, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useUsers } from '../hooks/useUsers';
 import { useRoles } from '../hooks/useRoles';
 import { useApiClient } from '../hooks/useApiClient';
@@ -63,6 +64,7 @@ export function Users(): JSX.Element {
     data: users,
     loading: usersLoading,
     error: usersError,
+    errorStatus: usersErrorStatus,
     pagination,
     reload: reloadUsers,
   } = useUsers({ limit, offset });
@@ -71,6 +73,7 @@ export function Users(): JSX.Element {
     data: roles,
     loading: rolesLoading,
     error: rolesError,
+    errorStatus: rolesErrorStatus,
     reload: reloadRoles,
   } = useRoles();
 
@@ -289,6 +292,35 @@ export function Users(): JSX.Element {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [users, selectedUserIds, roleMap]);
 
+  if (usersErrorStatus === 403 || rolesErrorStatus === 403) {
+    return (
+      <div className="flex flex-col gap-5">
+        <SectionHeader eyebrow="GOVERNANCE · IDENTITY" title="Users & Roles" />
+        <Panel padding="lg" eyebrow="ACCESS RESTRICTED" title="User administration is restricted">
+          <div role="alert">
+            <EmptyState
+              icon={<ShieldAlert aria-hidden="true" />}
+              title="You don’t have permission to manage users"
+              description="Your current account cannot access user administration. Contact your Control One administrator if you need access."
+              action={<Link className="text-sm font-medium text-primary underline underline-offset-4" to="/">Return to Control Room</Link>}
+            />
+          </div>
+        </Panel>
+      </div>
+    );
+  }
+
+  if (usersLoading || rolesLoading) {
+    return (
+      <div className="flex flex-col gap-5">
+        <SectionHeader eyebrow="GOVERNANCE · IDENTITY" title="Users & Roles" />
+        <Panel padding="md" title="Loading user administration">
+          <p role="status" className="text-sm text-text-secondary">Checking current access and loading the directory…</p>
+        </Panel>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeader
@@ -344,11 +376,11 @@ export function Users(): JSX.Element {
       )}
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <KpiTile label="TOTAL USERS" value={pagination.total} tone="brand" />
-        <KpiTile label="AVAILABLE ROLES" value={roles.length} tone="info" />
+        <KpiTile label="TOTAL USERS" value={usersError ? '—' : pagination.total} tone="brand" />
+        <KpiTile label="AVAILABLE ROLES" value={rolesError ? '—' : roles.length} tone="info" />
         <KpiTile
           label="USERS WITH ROLES"
-          value={users.filter((u) => uniqueRoleNames(u.roles).length > 0).length}
+          value={usersError ? '—' : users.filter((u) => uniqueRoleNames(u.roles).length > 0).length}
           tone="healthy"
         />
       </div>
@@ -467,7 +499,7 @@ export function Users(): JSX.Element {
                   <p className="text-xs text-state-healthy">{formSuccess}</p>
                 )}
 
-                <p className="text-sm text-text-secondary">Select global roles for this user. These apply across tenants. Temporary tenant assignments are not included or changed here. If another administrator changes these roles, this draft will be rejected. Cancel and refresh the directory before reviewing a new draft.</p>
+                <p className="text-sm text-text-secondary">Select global roles for this user. These apply across tenants. Saving preserves deadlines on retained administrator grants; use the source controls above to change an expiry. Temporary tenant assignments are not included or changed here. If another administrator changes these roles, this draft will be rejected. Cancel and refresh the directory before reviewing a new draft.</p>
                 <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
                   {roles.map((role) => (
                     <label

@@ -84,6 +84,13 @@ jobs:
       ca_cert_file: ""
 
 auth:
+  # Optional single-provider current-authority adapter. This is NOT the OIDC
+  # discovery/token endpoint. Disabled until its organizational contract is qualified.
+  execution_authority:
+    enabled: false
+    endpoint: "https://authority.example.com/control-one/check"
+    credential_file: "/run/secrets/control-one-authority-service-token"
+    ca_file: "" # Optional approved private CA; normal system trust is otherwise used.
   oidc:
     enabled: true
     issuer_url: "https://issuer.example.com"

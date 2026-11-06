@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,7 +14,7 @@ import (
 	"github.com/CloudSpaceLab/control_one/controlplane/internal/config"
 )
 
-// OIDCProvider performs production-grade OIDC ID token verification.
+// OIDCProvider verifies signed JWT API access tokens using discovered provider keys.
 type OIDCProvider struct {
 	cfg      config.OIDCConfig
 	rbac     config.RBACConfig
@@ -42,7 +44,10 @@ func NewOIDCProvider(ctx context.Context, oidcCfg config.OIDCConfig, rbacCfg con
 		return nil, fmt.Errorf("init oidc provider: %w", err)
 	}
 
-	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
+	if len(oidcCfg.Audience) != 1 || strings.TrimSpace(oidcCfg.Audience[0]) == "" || oidcCfg.Audience[0] == clientID {
+		return nil, errors.New("one distinct API audience is required for JWT access tokens")
+	}
+	verifier := provider.Verifier(&oidc.Config{ClientID: oidcCfg.Audience[0], SupportedSigningAlgs: []string{"RS256"}})
 
 	return &OIDCProvider{
 		cfg:      oidcCfg,
@@ -52,7 +57,7 @@ func NewOIDCProvider(ctx context.Context, oidcCfg config.OIDCConfig, rbacCfg con
 	}, nil
 }
 
-// Verify validates an ID token and maps claims into a Principal.
+// Verify accepts the declared RS256 JWT access-token profile, never an ID token.
 func (p *OIDCProvider) Verify(ctx context.Context, rawToken string) (*Principal, error) {
 	token := strings.TrimSpace(rawToken)
 	if token == "" {
@@ -67,11 +72,50 @@ func (p *OIDCProvider) Verify(ctx context.Context, rawToken string) (*Principal,
 		return nil, fmt.Errorf("verify oidc token: %w", err)
 	}
 
+	// Check token use only after signature/issuer/audience verification.
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, errors.New("signed JWT access token required")
+	}
+	headerBytes, e := base64.RawURLEncoding.DecodeString(parts[0])
+	if e != nil {
+		return nil, errors.New("invalid access token header")
+	}
+	var header struct {
+		Type string `json:"typ"`
+	}
+	if json.Unmarshal(headerBytes, &header) != nil {
+		return nil, errors.New("invalid access token header")
+	}
+	if header.Type != "at+jwt" && header.Type != "application/at+jwt" {
+		return nil, errors.New("API requires an explicit JWT access token; ID tokens are not accepted")
+	}
 	var rawClaims map[string]any
 	if err := idToken.Claims(&rawClaims); err != nil {
 		return nil, fmt.Errorf("parse oidc claims: %w", err)
 	}
 
+	now := time.Now().Unix()
+	issued, issuedOK := rawClaims["iat"].(float64)
+	expiry, expiryOK := rawClaims["exp"].(float64)
+	if !issuedOK || issued <= 0 || issued > float64(now+30) || !expiryOK || expiry <= float64(now) || expiry <= issued || strings.TrimSpace(claimString(rawClaims, "jti")) == "" || claimString(rawClaims, "client_id") != p.cfg.ClientID {
+		return nil, errors.New("access token metadata or authorized client invalid")
+	}
+	if nbf, exists := rawClaims["nbf"]; exists {
+		value, ok := nbf.(float64)
+		if !ok || value > float64(now) {
+			return nil, errors.New("access token not yet valid")
+		}
+	}
+	allowed := false
+	for _, scope := range strings.Fields(claimString(rawClaims, "scope")) {
+		if scope == "controlone.access" {
+			allowed = true
+		}
+	}
+	if !allowed {
+		return nil, errors.New("controlone.access scope required")
+	}
 	audValues := extractStringSlice(rawClaims, "aud")
 	if len(p.cfg.Audience) > 0 && !audAllowed(audValues, p.cfg.Audience) {
 		return nil, fmt.Errorf("token audience not in allowed set")

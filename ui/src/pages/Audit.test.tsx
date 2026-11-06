@@ -149,6 +149,9 @@ describe('Audit page production hardening', () => {
     const csv = await readBlobText(blob);
     expect(csv).toContain('user.login');
     expect(csv).toContain('session-1');
+    expect(csv).toContain('Actor ID');
+    expect(csv).toContain('user-1');
+    expect(csv).toContain('audit-1');
     expect(csv).not.toContain('node.delete');
     expect(csv).not.toContain('old-node');
   });
@@ -162,3 +165,21 @@ function readBlobText(blob: Blob): Promise<string> {
     reader.readAsText(blob);
   });
 }
+
+it('requests global identity evidence explicitly without a tenant',async()=>{
+ mocks.useAuditLogs.mockReturnValue({...mocks.auditState,data:[],error:null,loading:false});
+ const user=userEvent.setup();renderAudit();
+ await user.selectOptions(screen.getByLabelText('Audit scope'),'global_identity');
+ await waitFor(()=>expect(mocks.useAuditLogs).toHaveBeenLastCalledWith(expect.objectContaining({scope:'global_identity',tenant_id:undefined})));
+ expect(screen.getByText(/Current global administrator access required/)).toBeVisible();
+});
+
+it('does not turn a user resource UUID into a session link',()=>{
+ mocks.useAuditLogs.mockReturnValue({...mocks.auditState,error:null,loading:false,data:[{...userLogin,resource_type:'user',resource_id:'2a1779fb-abc0-4fc5-8c8e-cea66c1234a1'}]});
+ renderAudit();expect(screen.queryByRole('link',{name:/SESS/})).not.toBeInTheDocument();
+});
+
+it('explains global identity denial without a misleading retry or export',async()=>{
+ const user=userEvent.setup();mocks.useAuditLogs.mockReturnValue({...mocks.auditState,data:[],error:'Current global administrator required',errorStatus:403,loading:false});renderAudit();await user.selectOptions(screen.getByLabelText('Audit scope'),'global_identity');
+ expect(screen.getAllByText('Global audit access restricted').length).toBeGreaterThan(0);expect(screen.queryByRole('button',{name:'Retry'})).not.toBeInTheDocument();expect(screen.getByRole('button',{name:'Export current audit page as CSV'})).toBeDisabled();
+});

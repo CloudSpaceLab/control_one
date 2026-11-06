@@ -3,6 +3,10 @@ import { generateCodeChallenge, generateCodeVerifier, generateRandomState } from
 
 const PKCE_SESSION_KEY = 'control-one-oidc';
 const PKCE_SESSION_LIFETIME_MS = 10 * 60 * 1000;
+const TOKEN_EXCHANGE_TIMEOUT_MS = 15_000;
+const MAX_TOKEN_RESPONSE_BYTES = 65_536;
+
+class OidcExchangeError extends Error {}
 
 interface PKCESession {
   state: string;
@@ -18,6 +22,73 @@ interface TokenResponse {
   expires_in?: number;
   refresh_token?: string;
   scope?: string;
+}
+
+// Bound both the initial request and a provider that stalls while streaming its
+// response. Only messages constructed here may reach the callback screen.
+async function requestApiToken(body: URLSearchParams): Promise<TokenResponse> {
+  const controller = new AbortController();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new OidcExchangeError('Organization sign-in timed out. Start a new sign-in or contact your administrator.'));
+    }, TOKEN_EXCHANGE_TIMEOUT_MS);
+  });
+  const exchange = async (): Promise<TokenResponse> => {
+    const response = await fetch(oidcConfig.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: body.toString(),
+      signal: controller.signal,
+      redirect: 'error',
+      credentials: 'omit',
+      cache: 'no-store',
+      referrerPolicy: 'no-referrer',
+    });
+    if (!response.ok) {
+      throw new OidcExchangeError(`OIDC token exchange failed (HTTP ${response.status}). Start a fresh sign-in or contact your administrator.`);
+    }
+    const invalid = () => new OidcExchangeError('Provider returned an invalid token response. Start a fresh sign-in or contact your administrator.');
+    if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '') || !response.body) throw invalid();
+    const declaredSize = response.headers.get('content-length');
+    if (declaredSize && (!/^\d+$/.test(declaredSize) || Number(declaredSize) > MAX_TOKEN_RESPONSE_BYTES)) throw invalid();
+    reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        size += chunk.value.byteLength;
+        if (size > MAX_TOKEN_RESPONSE_BYTES) throw invalid();
+        chunks.push(chunk.value);
+      }
+    } finally {
+      // Cancellation also covers oversized/error streams. Never await a
+      // provider-controlled cancellation handler beyond the exchange deadline.
+      void reader.cancel().catch(() => undefined);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    try {
+      const payload: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw invalid();
+      return payload as TokenResponse;
+    } catch { throw invalid(); }
+  };
+  try {
+    return await Promise.race([exchange(), deadline]);
+  } catch (error) {
+    if (error instanceof OidcExchangeError) throw error;
+    throw new OidcExchangeError('Organization sign-in could not reach the identity provider. Start a new sign-in or contact your administrator.');
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    if (reader) void reader.cancel().catch(() => undefined);
+  }
 }
 
 function persistSession(data: PKCESession): void {
@@ -108,6 +179,9 @@ export async function exchangeCodeForToken(code: string, state: string): Promise
   if (session.state !== state) {
     throw new Error('OIDC state mismatch');
   }
+  if (typeof code !== 'string' || !code || code.length > 4096 || Array.from(code).some(character => character.charCodeAt(0) <= 32 || character.charCodeAt(0) === 127) || state.length > 512) {
+    throw new Error('Invalid authorization parameters. Start a new sign-in.');
+  }
 
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
@@ -120,23 +194,10 @@ export async function exchangeCodeForToken(code: string, state: string): Promise
     body.set('audience', oidcConfig.audience);
   }
 
-  const response = await fetch(oidcConfig.tokenUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: body.toString(),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OIDC token exchange failed: ${text || response.statusText}`);
-  }
-
-  const payload = (await response.json()) as TokenResponse;
-  const token = payload.id_token || payload.access_token;
-  if (!token) {
-    throw new Error('OIDC token response missing id_token or access_token');
+  const payload = await requestApiToken(body);
+  const token = payload.access_token;
+  if (typeof token !== 'string' || !token || /[^\x21-\x7e]/.test(token) || typeof payload.token_type !== 'string' || payload.token_type.toLowerCase() !== 'bearer') {
+    throw new Error('Provider must issue a Bearer access token for the Control One API');
   }
 
   return { token, returnTo: session.returnTo };

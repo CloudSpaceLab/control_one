@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/CloudSpaceLab/control_one/controlplane/internal/executionauthority"
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
@@ -20,12 +21,13 @@ import (
 
 // Store wraps database connectivity and lifecycle operations.
 type Store struct {
-	log             *zap.Logger
-	db              *sql.DB
-	cfg             config.DatabaseConfig
-	clock           func() time.Time
-	publicationOnce sync.Once
-	publicationGate chan struct{}
+	executionAuthority *executionauthority.Client
+	log                *zap.Logger
+	db                 *sql.DB
+	cfg                config.DatabaseConfig
+	clock              func() time.Time
+	publicationOnce    sync.Once
+	publicationGate    chan struct{}
 }
 
 // GetNode returns a node by ID.
@@ -1328,13 +1330,14 @@ type AuditLog struct {
 
 // AuditLogFilter narrows audit log queries.
 type AuditLogFilter struct {
-	TenantID     uuid.UUID
-	ActorType    string
-	Action       string
-	ResourceType string
-	ResourceID   string
-	Since        *time.Time
-	Until        *time.Time
+	GlobalIdentity bool // Set only after current global-administrator authorization.
+	TenantID       uuid.UUID
+	ActorType      string
+	Action         string
+	ResourceType   string
+	ResourceID     string
+	Since          *time.Time
+	Until          *time.Time
 }
 
 // CreateAuditLog persists an audit entry.
@@ -1402,6 +1405,13 @@ func (s *Store) ListAuditLogs(ctx context.Context, filter AuditLogFilter, limit,
 		return nil, 0, errors.New("limit and offset must be non-negative")
 	}
 
+	source := "audit_logs"
+	if filter.GlobalIdentity {
+		if filter.TenantID != uuid.Nil {
+			return nil, 0, errors.New("global identity scope cannot include a tenant")
+		}
+		source = "global_identity_audit"
+	}
 	var (
 		clauses = []string{"TRUE"}
 		args    []any
@@ -1438,10 +1448,10 @@ func (s *Store) ListAuditLogs(ctx context.Context, filter AuditLogFilter, limit,
 
 	query := fmt.Sprintf(`
 		SELECT id, tenant_id, actor_id, actor_type, action, resource_type, resource_id, metadata, created_at
-		FROM audit_logs
+		FROM %s
 		WHERE %s
 		ORDER BY created_at DESC
-	`, strings.Join(clauses, " AND "))
+	`, source, strings.Join(clauses, " AND "))
 
 	argsWithPagination := append([]any{}, args...)
 	if limit > 0 {
@@ -1453,7 +1463,7 @@ func (s *Store) ListAuditLogs(ctx context.Context, filter AuditLogFilter, limit,
 		query += fmt.Sprintf(" OFFSET $%d", len(argsWithPagination))
 	}
 
-	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM audit_logs WHERE %s`, strings.Join(clauses, " AND "))
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE %s`, source, strings.Join(clauses, " AND "))
 	countRow := s.db.QueryRowContext(ctx, countQuery, args...)
 
 	var total int
@@ -1574,7 +1584,8 @@ type ComplianceResult struct {
 
 // Options allows injection of testing helpers.
 type Options struct {
-	Clock func() time.Time
+	Clock              func() time.Time
+	ExecutionAuthority *executionauthority.Client
 }
 
 // New creates a Store from configuration.
@@ -1592,10 +1603,11 @@ func New(log *zap.Logger, cfg config.DatabaseConfig, opts Options) (*Store, erro
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 
 	s := &Store{
-		log:   log,
-		db:    db,
-		cfg:   cfg,
-		clock: opts.Clock,
+		log:                log,
+		db:                 db,
+		cfg:                cfg,
+		clock:              opts.Clock,
+		executionAuthority: opts.ExecutionAuthority,
 	}
 	if s.clock == nil {
 		s.clock = time.Now

@@ -1703,6 +1703,9 @@ export interface Profile {
 }
 
 export interface GlobalRoleSourceEvidence {
+  execution_authority?: {authentication_backed: boolean; configured: boolean; binding_present: boolean; detail: string} | null;
+  authentication_migration_available?: boolean;
+  authentication_authorities?: string[];
   administrator_changes_available?: boolean;
   revision: string;
   effective_roles: string[];
@@ -2068,6 +2071,7 @@ export interface AuditLog {
 }
 
 export interface ListAuditLogsParams {
+  scope?: 'tenant' | 'global_identity';
   tenant_id?: string;
   actor_type?: string;
   action?: string;
@@ -3530,6 +3534,10 @@ export class APIClient {
     };
   }
 
+  async migrateAuthenticationIdentity(userID: string, body: {expected_revision: string; authority: string; subject: string; reason: string; preserve_as_administrator: boolean}): Promise<GlobalRoleSourceEvidence> {
+    return this.request<GlobalRoleSourceEvidence>(`/api/v1/users/${encodeURIComponent(userID)}/authentication-migration`, {method:'POST',body:JSON.stringify(body)});
+  }
+
   async getGlobalRoleSources(userID: string): Promise<GlobalRoleSourceEvidence> {
     return this.request<GlobalRoleSourceEvidence>(`/api/v1/users/${encodeURIComponent(userID)}/role-sources`);
   }
@@ -3887,6 +3895,7 @@ export class APIClient {
     params: ListAuditLogsParams = {},
   ): Promise<PaginatedResponse<AuditLog>> {
     const search = new URLSearchParams();
+    if (params.scope) search.set("scope", params.scope);
     if (params.tenant_id) search.set("tenant_id", params.tenant_id);
     if (params.actor_type) search.set("actor_type", params.actor_type);
     if (params.action) search.set("action", params.action);

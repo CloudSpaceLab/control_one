@@ -49,12 +49,10 @@ func checkPatchOrganizationTx(ctx context.Context, tx *sql.Tx, tenant uuid.UUID,
 	if directoryIdentity {
 		return 0, fmt.Errorf("directory-backed organizational owner or approver cannot authorize patch execution until directory authority is qualified")
 	}
-	var authenticationIdentity bool
-	if e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id IN ($1,$2) AND external_id LIKE 'auth:v1:%')`, record.Policy.OwnerID, record.Policy.ApproverID).Scan(&authenticationIdentity); e != nil {
-		return 0, e
-	}
-	if authenticationIdentity {
-		return 0, fmt.Errorf("authentication-backed organizational authority requires execution-time provider revalidation")
+	for _, target := range []authorityTarget{{record.Policy.OwnerID, "organization_owner"}, {record.Policy.ApproverID, "organization_approver"}} {
+		if e = checkExecutionAuthorityTx(ctx, tx, tenant, target.user, target.purpose); e != nil {
+			return 0, e
+		}
 	}
 	if e = organizationAdmin(ctx, tx, tenant, record.Policy.OwnerID); e != nil {
 		return 0, e
@@ -137,6 +135,11 @@ func checkOrganizationApprovalBinding(ctx context.Context, tx *sql.Tx, tenant, a
 // Called by the existing agent's under-APT-lock callback. Jobs created before
 // policy adoption have revision zero and cannot start after adoption.
 func (s *Store) CheckPatchOrganizationExecution(ctx context.Context, tenant, node, jobID uuid.UUID) error {
+	var prepErr error
+	ctx, prepErr = s.prepareExecutionAuthority(ctx, tenant, "start", jobID.String())
+	if prepErr != nil {
+		return prepErr
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -163,5 +166,8 @@ func (s *Store) CheckPatchOrganizationExecution(ctx context.Context, tenant, nod
 	if e != nil {
 		return e
 	}
-	return checkPatchOrganizationScopeTx(ctx, tx, tenant, node, payload.Mode, raw, revision)
+	if e = checkPatchOrganizationScopeTx(ctx, tx, tenant, node, payload.Mode, raw, revision); e != nil {
+		return e
+	}
+	return checkExecutionProofDeadlines(ctx)
 }

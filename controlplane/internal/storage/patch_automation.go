@@ -138,12 +138,14 @@ func automationRole(ctx context.Context, tx *sql.Tx, tenant, actor uuid.UUID, au
 		return fmt.Errorf("current scheduling authority unavailable: %w", e)
 	}
 	if strings.HasPrefix(external, "auth:v1:") {
-		return fmt.Errorf("authentication-backed scheduling authority requires execution-time provider revalidation")
+		if e = checkExecutionAuthorityTx(ctx, tx, tenant, actor, authority); e != nil {
+			return e
+		}
 	}
 	if provider == "ldap" {
 		return fmt.Errorf("directory-backed scheduling authority cannot be used until directory authority is qualified")
 	}
-	e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles u JOIN roles r ON r.id=u.role_id WHERE u.user_id=$1 AND (u.tenant_id=$2 OR u.tenant_id IS NULL) AND (u.expires_at IS NULL OR u.expires_at>NOW()) AND (r.name='admin' OR ($3='individual_approval' AND r.name='operator')))`, actor, tenant, authority).Scan(&allowed)
+	e = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles u JOIN roles r ON r.id=u.role_id WHERE u.user_id=$1 AND (u.tenant_id=$2 OR u.tenant_id IS NULL) AND (u.expires_at IS NULL OR u.expires_at>clock_timestamp()) AND (r.name='admin' OR ($3='individual_approval' AND r.name='operator')))`, actor, tenant, authority).Scan(&allowed)
 	if e != nil {
 		return e
 	}
@@ -169,6 +171,11 @@ func automationScope(p patchgovernance.Operations, b automationBinding, now time
 func (s *Store) QueuePatchAutomationRun(ctx context.Context, tenant, approval, actor uuid.UUID, revision int64, at time.Time, authority string) (PatchAutomationRun, error) {
 	if authority != "individual_approval" && authority != "tenant_policy" {
 		return PatchAutomationRun{}, fmt.Errorf("invalid authority")
+	}
+	var prepErr error
+	ctx, prepErr = s.prepareExecutionAuthority(ctx, tenant, "schedule", approval.String(), authorityTarget{actor, authority})
+	if prepErr != nil {
+		return PatchAutomationRun{}, prepErr
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
@@ -255,6 +262,9 @@ func (s *Store) QueuePatchAutomationRun(ctx context.Context, tenant, approval, a
 	}
 	r, e := scanAutomation(tx.QueryRowContext(ctx, `SELECT `+automationColumns+` FROM patch_automation_runs WHERE id=$1`, id).Scan)
 	if e != nil {
+		return r, e
+	}
+	if e = checkExecutionProofDeadlines(ctx); e != nil {
 		return r, e
 	}
 	return r, tx.Commit()
@@ -388,12 +398,20 @@ func checkAutomationHealthTx(ctx context.Context, tx *sql.Tx, tenant, node uuid.
 }
 
 func (s *Store) CheckPatchAutomationRun(ctx context.Context, tenant, id uuid.UUID) (PatchAutomationRun, error) {
+	var prepErr error
+	ctx, prepErr = s.prepareAutomationAuthority(ctx, tenant, id, "dispatch", id.String())
+	if prepErr != nil {
+		return PatchAutomationRun{}, prepErr
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return PatchAutomationRun{}, e
 	}
 	defer tx.Rollback()
 	r, _, e := checkAutomationRunTx(ctx, tx, tenant, id)
+	if e == nil {
+		e = checkExecutionProofDeadlines(ctx)
+	}
 	return r, e
 }
 
@@ -444,11 +462,23 @@ func (s *Store) DiscoverPatchAutomationRuns(ctx context.Context) error {
 
 // This check is also called by the agent's under-APT-lock authorization hook.
 func (s *Store) CheckPatchAutomationExecution(ctx context.Context, tenant, id, job uuid.UUID) error {
+	var prepErr error
+	ctx, prepErr = s.prepareAutomationAuthority(ctx, tenant, id, "start", job.String())
+	if prepErr != nil {
+		return prepErr
+	}
 	tx, e := s.db.BeginTx(ctx, nil)
 	if e != nil {
 		return e
 	}
 	defer tx.Rollback()
+	if e = lockAutomationTenant(ctx, tx, tenant); e != nil {
+		return e
+	}
+	organizationRevision, e := checkPatchOrganizationTx(ctx, tx, tenant, nil)
+	if e != nil {
+		return e
+	}
 	var revision int64
 	var raw []byte
 	e = tx.QueryRowContext(ctx, `SELECT revision,document FROM patch_review_operations WHERE tenant_id=$1 FOR SHARE`, tenant).Scan(&revision, &raw)
@@ -462,6 +492,9 @@ func (s *Store) CheckPatchAutomationExecution(ctx context.Context, tenant, id, j
 	var r PatchAutomationRun
 	r, e = scanAutomation(tx.QueryRowContext(ctx, `SELECT `+automationColumns+` FROM patch_automation_runs WHERE id=$1 AND tenant_id=$2`, id, tenant).Scan)
 	if e != nil {
+		return e
+	}
+	if e = checkOrganizationApprovalBinding(ctx, tx, tenant, r.ApprovalID, organizationRevision); e != nil {
 		return e
 	}
 	if r.Status != "dispatched" || !r.ExecutionJobID.Valid || r.ExecutionJobID.UUID != job || r.PolicyRevision != revision || !p.Automation.Enabled || p.Automation.ValidUntil == nil || !p.Automation.ValidUntil.After(time.Now()) || !r.ExpiresAt.After(time.Now()) {
@@ -491,7 +524,10 @@ func (s *Store) CheckPatchAutomationExecution(ctx context.Context, tenant, id, j
 	if r.Authority == "tenant_policy" && (p.Automation.Mode != "automatic" || p.Automation.RequireApproval || slices.Contains(p.Automation.CanaryNodeIDs, b.node.String())) {
 		return fmt.Errorf("automatic execution authority changed")
 	}
-	return automationCohortGateTx(ctx, tx, tenant, revision, p.Automation, b)
+	if e = automationCohortGateTx(ctx, tx, tenant, revision, p.Automation, b); e != nil {
+		return e
+	}
+	return checkExecutionProofDeadlines(ctx)
 }
 
 func automationCohortGateTx(ctx context.Context, tx *sql.Tx, tenant uuid.UUID, revision int64, policy patchgovernance.AutomationPolicy, b automationBinding) error {

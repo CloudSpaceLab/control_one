@@ -92,6 +92,22 @@ func TestValidateRequiresEssentials(t *testing.T) {
 		}
 	})
 
+	t.Run("OIDC access token requires a distinct API audience", func(t *testing.T) {
+		cfg := base()
+		cfg.Auth.OIDC.Enabled = true
+		cfg.Auth.OIDC.IssuerURL = "https://issuer.example.invalid"
+		cfg.Auth.OIDC.ClientID = "browser-client"
+		for _, aud := range [][]string{nil, {"browser-client"}, {"api-one", "api-two"}} {
+			cfg.Auth.OIDC.Audience = aud
+			if err := Validate(cfg); err == nil {
+				t.Fatalf("unsafe API audience accepted: %v", aud)
+			}
+		}
+		cfg.Auth.OIDC.Audience = []string{"controlone-api"}
+		if err := Validate(cfg); err != nil {
+			t.Fatal(err)
+		}
+	})
 	t.Run("valid base config passes", func(t *testing.T) {
 		cfg := base()
 		cfg.Auth.OIDC.CacheTTL = time.Minute
